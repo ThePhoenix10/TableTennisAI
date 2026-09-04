@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   PongAI design system — see PONGAI_FRONTEND_SPEC.md §2.
+
+   Every contrast ratio noted below is measured against the stated background.
+   The brand orange (#f55f02) is 2.46:1 on the page background and FAILS
+   WCAG AA for text: it is a fill colour only. Use `--color-brand-text` when
+   an orange-looking *text* colour is needed.
+--------------------------------------------------------------------------- */
+
+@theme {
+  /* Reset Tailwind's default type scale — the spec allows exactly six sizes. */
+  --text-*: initial;
+  --text-xs: 0.75rem; /* 12 */
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.875rem; /* 14 */
+  --text-sm--line-height: 1.25rem;
+  --text-base: 1rem; /* 16 */
+  --text-base--line-height: 1.5rem;
+  --text-lg: 1.25rem; /* 20 */
+  --text-lg--line-height: 1.75rem;
+  --text-xl: 1.75rem; /* 28 */
+  --text-xl--line-height: 2.25rem;
+  --text-2xl: 2.5rem; /* 40 */
+  --text-2xl--line-height: 3rem;
+
+  /* Sans-serif system stack; monospace reserved for numerals and code. */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji";
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    monospace;
+
+  /* Brand */
+  --color-brand: #f55f02; /* fills, bars, active states, focus rings */
+  --color-brand-text: #a63e02; /* 4.85:1 on bg — orange TEXT when needed */
+  --color-brand-hover: #d95202;
+  --color-on-brand: #000000; /* 6.52:1 — text ON an orange button is BLACK */
+
+  /* Surfaces */
+  --color-bg: #e6e0dc;
+  --color-surface: #ffffff;
+  --color-border: #d4ccc6;
+
+  /* Text */
+  --color-ink: #000000; /* 16.06:1 */
+  --color-ink-muted: #5a5350; /* 5.76:1 */
+  --color-ink-subtle: #7a726e; /* 3.60:1 — decorative only, never body text */
+
+  /* Shot classes — all verified >= 4.5:1 on both #e6e0dc and #ffffff.
+     Colour NEVER carries meaning alone; pair with the S/A/C/D letter. */
+  --color-serve: #1d4ed8; /* 5.13:1 */
+  --color-attack: #b91c1c; /* 4.95:1 */
+  --color-control: #065f46; /* 5.88:1 */
+  --color-defence: #854d0e; /* 5.24:1 */
+
+  /* Cards: flat, 8px radius, no drop shadows. */
+  --radius-card: 0.5rem;
+}
+
+/* Single fixed palette — no dark mode. Prevents the UA from re-tinting
+   form controls and scrollbars against the light background. */
+:root {
+  color-scheme: light;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+  }
+
+  /* Data-dense product: numbers must sit in columns that do not jitter. */
+  :where(table, [data-numeric], .tabular) {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Visible focus, using the brand orange as an outline (a fill, not text). */
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  /* Uncertain shots (`abstain === true`) carry a diagonal hatch in addition
+     to reduced opacity, so the signal survives colour-vision deficiency and
+     greyscale printing. See spec §7.1. */
+  .hatch-uncertain {
+    background-image: repeating-linear-gradient(
+      45deg,
+      transparent 0 3px,
+      color-mix(in srgb, currentColor 45%, transparent) 3px 5px
+    );
+  }
+}
+
+/* Motion is minimal by design (150ms ease-out); honour the OS preference. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
