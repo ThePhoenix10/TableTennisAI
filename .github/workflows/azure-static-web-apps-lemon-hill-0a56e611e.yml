@@ -14,8 +14,10 @@ jobs:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
     runs-on: ubuntu-latest
     name: Build and Deploy Job
+    env:
+      NEXT_PUBLIC_API_BASE_URL: ${{ secrets.AZURE_FUNCTION_URL }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
           lfs: false
@@ -23,19 +25,15 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: Frontend/package-lock.json
+          node-version: 22
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
         working-directory: Frontend
 
       - name: Build
         run: npm run build
         working-directory: Frontend
-        env:
-          NEXT_PUBLIC_API_BASE_URL: ${{ secrets.AZURE_FUNCTION_URL }}
 
       - name: Build And Deploy
         id: builddeploy
@@ -44,8 +42,8 @@ jobs:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_TOKEN }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: "upload"
-          app_location: "Frontend"
-          output_location: "out"
+          app_location: "Frontend/out"
+          output_location: ""
           skip_app_build: true
 
   close_pull_request_job:
