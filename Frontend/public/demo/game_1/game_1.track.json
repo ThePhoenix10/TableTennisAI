@@ -1,0 +1,27 @@
+{
+ "fps": 120.0,
+ "n_frames": 21600,
+ "video_w": 1600,
+ "video_h": 900,
+ "scale": 10,
+ "layout": [
+  "left_cx",
+  "left_cy",
+  "right_cx",
+  "right_cy"
+ ],
+ "dtype": "int16",
+ "stride": 4,
+ "players": {
+  "left": {
+   "crop_w": 600.0,
+   "crop_h": 900.0,
+   "detected_pct": 0.288
+  },
+  "right": {
+   "crop_w": 600.0,
+   "crop_h": 900.0,
+   "detected_pct": 0.293
+  }
+ }
+}

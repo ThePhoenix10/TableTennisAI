@@ -5,8 +5,8 @@ export default function NotFound() {
     <div className="mx-auto max-w-[1280px] px-4 py-16 sm:px-6">
       <h1 className="text-xl font-semibold tracking-tight">Not found</h1>
       <p className="text-ink-muted mt-2 max-w-prose text-base">
-        That page does not exist. In v1 only the three precomputed demo matches
-        are available.
+        That page does not exist. In v1 only the precomputed demo matches are
+        available.
       </p>
       <Link
         href="/"

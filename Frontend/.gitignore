@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Generated synthetic fixtures (npm run generate:demo) are flat files directly
+# in public/demo/. Real exported matches live in per-match SUBFOLDERS
+# (public/demo/game_1/…) and ARE committed, so only the flat files are ignored.
+/public/demo/*.json
+/public/demo/*.bin
+
+# Real demo video is hosted on R2 — never commit the mp4
+public/demo/**/*.mp4
