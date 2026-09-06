@@ -9,7 +9,11 @@
     "lint": "eslint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "generate:demo": "node scripts/generate-demo-data.mjs",
+    "predev": "node scripts/generate-demo-data.mjs",
+    "prebuild": "node scripts/generate-demo-data.mjs",
+    "test": "node --import tsx --test 'src/**/*.test.ts'"
   },
   "dependencies": {
     "next": "16.3.4",
@@ -26,6 +30,7 @@
     "prettier": "^3.9.6",
     "prettier-plugin-tailwindcss": "^0.8.1",
     "tailwindcss": "^4",
+    "tsx": "^4.23.13",
     "typescript": "^5"
   },
   "description": "PongAI — table-tennis video analysis frontend"

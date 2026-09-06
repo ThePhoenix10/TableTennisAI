@@ -218,31 +218,67 @@ export const WORKS_BEST_WITH = [
 export interface DemoMatch {
   readonly id: string;
   readonly title: string;
-  readonly summary: string;
-  readonly durationLabel: string;
-  readonly fps: number;
+  readonly blurb: string;
+  /** Carousel thumbnail; real exports ship one, synthetic ones do not. */
+  readonly thumbUrl?: string;
+  /**
+   * False only for the genuinely analysed match. Presenting fabricated numbers
+   * identically to real ones would let someone form an opinion of the model
+   * from data it never produced.
+   */
+  readonly isSynthetic: boolean;
 }
 
+/**
+ * The demo registry.
+ *
+ * Deliberately carries no shot counts, rally counts, durations or fps: those
+ * are read from each match's JSON at load time, so a re-export can never leave
+ * the card contradicting the analysis screen.
+ *
+ * The real match is first.
+ */
 export const DEMO_MATCHES: readonly DemoMatch[] = [
+  {
+    id: "game_1",
+    title: "Real match",
+    blurb:
+      "An actual analysed match. Every shot detected, timed and classified by the pipeline.",
+    thumbUrl: "/demo/game_1/game_1.thumb.jpg",
+    isSynthetic: false,
+  },
   {
     id: "game_2",
     title: "Full match",
-    summary: "~800 shots across 87 rallies.",
-    durationLabel: "24 min",
-    fps: 120,
+    blurb: "A long match, used to exercise timeline performance.",
+    isSynthetic: true,
   },
   {
     id: "test_1",
     title: "Attacker vs chopper",
-    summary: "~84 shots, heavy on the classes PongAI is least sure about.",
-    durationLabel: "2 min",
-    fps: 120,
+    blurb: "Heavy on the classes PongAI is least sure about.",
+    isSynthetic: true,
+  },
+  {
+    id: "game_4",
+    title: "Chop-heavy",
+    blurb: "A defensive style throughout.",
+    isSynthetic: true,
   },
   {
     id: "game_1_30fps",
     title: "30fps phone video",
-    summary: "~159 shots. Swing-speed metrics are withheld at this frame rate.",
-    durationLabel: "5 min",
-    fps: 30,
+    blurb: "Swing-speed metrics are withheld at this frame rate.",
+    isSynthetic: true,
   },
 ];
+
+export const getDemoMatch = (id: string): DemoMatch | undefined =>
+  DEMO_MATCHES.find((m) => m.id === id);
+
+export const isSyntheticDemo = (id: string): boolean =>
+  getDemoMatch(id)?.isSynthetic ?? true;
+
+/** Real exports live in a per-match subfolder; synthetic fixtures are flat. */
+export const analysisJsonUrl = (id: string): string =>
+  isSyntheticDemo(id) ? `/demo/${id}.json` : `/demo/${id}/${id}.json`;

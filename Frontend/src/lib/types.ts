@@ -78,6 +78,49 @@ export interface Analysis {
   pose_windows?: Float32Array;
 }
 
+/**
+ * What ships as a match's JSON.
+ *
+ * Two producers write this shape:
+ *   - the synthetic generator, flat at `public/demo/{id}.json`
+ *   - the real exporter, nested at `public/demo/{id}/{id}.json`
+ *
+ * They do not agree on every field, so anything only one of them emits is
+ * optional here and must be treated as absent-by-default at the call site.
+ */
+export interface AnalysisFile extends Omit<Analysis, "pose_windows"> {
+  /**
+   * Canonical pose windows, [n_shots, 97, 17, 2] Float32 — ~10MB for a full
+   * match, so served as an Int16 sidecar quantised by `poses_scale`.
+   *
+   * SYNTHETIC ONLY. Real exports burn the skeleton into the video instead and
+   * ship no pose windows, so everything downstream of this must degrade
+   * gracefully rather than assume it is present.
+   */
+  poses_url?: string;
+  poses_scale?: number;
+  /** True for generated fixtures. Real exports omit it. */
+  synthetic?: boolean;
+  /**
+   * REAL EXPORTS ONLY. The source-video window this export covers.
+   *
+   * `frame` and `timestamp_s` on each shot are relative to `start_frame`, not
+   * to the original footage — verified for game_1, where the clip spans
+   * 21600 frames at 120fps and the served MP4 is exactly those 180 seconds.
+   */
+  clip?: {
+    start_frame: number;
+    end_frame: number;
+    is_clipped: boolean;
+  };
+  /**
+   * REAL EXPORTS ONLY, and NOT USED: it points at `/demo/{id}.track.json`,
+   * one folder above where the file actually sits. Track paths are built from
+   * the match id instead. See `loadCropTrack`.
+   */
+  track_url?: string;
+}
+
 /** Keys of `Shot` that hold a kinematic measurement. */
 export type KinematicKey =
   | "backswing_amplitude"
