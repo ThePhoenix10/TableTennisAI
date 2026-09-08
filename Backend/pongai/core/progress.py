@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pongai.core.schema import Job, JobStage, JobStatus, utcnow
+from pongai.core.schema import STAGE_LABELS, Job, JobStage, JobStatus, utcnow
+from pongai.core.validation import Severity
 
 # Share of total wall time. Pose and render dominate; everything else is noise.
 STAGE_WEIGHTS: dict[JobStage, float] = {
@@ -29,15 +30,10 @@ STAGE_ORDER: list[JobStage] = [
     JobStage.DETECT, JobStage.CLASSIFY, JobStage.RENDER, JobStage.UPLOAD,
 ]
 
-STAGE_LABELS: dict[JobStage, str] = {
-    JobStage.VALIDATE:      "Checking the video",
-    JobStage.ACTIVITY_GATE: "Finding the rallies",
-    JobStage.POSE:          "Tracking body movement",
-    JobStage.DETECT:        "Detecting shots",
-    JobStage.CLASSIFY:      "Classifying strokes",
-    JobStage.RENDER:        "Rendering the analysis",
-    JobStage.UPLOAD:        "Saving results",
-}
+# Re-exported from schema, where it sits beside JobStage. Kept importable here
+# because this module is the rest of the progress vocabulary.
+__all__ = ["STAGE_LABELS", "STAGE_WEIGHTS", "STAGE_ORDER", "ProgressReporter",
+           "overall_progress", "estimate_total_s", "eta_s"]
 
 # Wall time ~5x the clip duration on a T4, plus cold start.
 REALTIME_FACTOR = 5.0
@@ -86,10 +82,15 @@ class ProgressReporter:
         import time
         self._started = time.time()
 
-    def stage(self, stage: JobStage, message: str | None = None) -> None:
+    def stage(self, stage: JobStage) -> None:
         """Entering a new stage. Always written, never throttled."""
         self.job.stage = stage
-        self.job.status = JobStatus.PROCESSING
+        # VALIDATE is the one stage that is not yet "processing". The worker
+        # used to set VALIDATING itself and then have this line overwrite it
+        # before the first table write, so the status never reached the table
+        # and the API's message branch for it could not execute.
+        self.job.status = (JobStatus.VALIDATING if stage is JobStage.VALIDATE
+                           else JobStatus.PROCESSING)
         self.job.progress = overall_progress(stage, 0.0)
         self._flush(force=True)
 
@@ -119,10 +120,30 @@ class ProgressReporter:
         self.job.finished_at = utcnow()
         self._flush(force=True)
 
+    def warn(self, rejections: list) -> None:
+        """Record non-blocking findings and keep going.
+
+        The worker's ffprobe is the authoritative read, so its warnings — not
+        the browser's advisory ones — are what the user should see. Written
+        immediately: the point of "swing speed will be missing" is that it
+        arrives before the half-hour wait, not after it.
+        """
+        warns = [r for r in rejections if r.severity == Severity.WARN]
+        if not warns:
+            return
+        self.job.warnings = warns
+        self._flush(force=True)
+
     def rejected(self, rejections: list) -> None:
         """Failed validation — not an error. The user gets readable reasons."""
         self.job.status = JobStatus.REJECTED
-        self.job.rejections = rejections
+        # Split by severity. Passing the whole list through would list a
+        # warning among the blocking reasons, so the UI would tell a user
+        # their video was refused for something that does not refuse it.
+        self.job.rejections = [r for r in rejections
+                               if r.severity == Severity.REJECT]
+        self.job.warnings = [r for r in rejections
+                             if r.severity == Severity.WARN]
         self.job.finished_at = utcnow()
         self._flush(force=True)
 

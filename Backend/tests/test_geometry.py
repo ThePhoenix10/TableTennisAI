@@ -2,7 +2,7 @@
 import numpy as np
 
 from pongai.worker.stages.geometry import (
-    GRID_FPS, L_HIP, L_SHO, L_WRI, R_HIP, R_SHO, R_WRI,
+    L_HIP, L_SHO, L_WRI, R_HIP, R_SHO, R_WRI,
     canonicalise, resample_to_grid, torso_scale,
 )
 
