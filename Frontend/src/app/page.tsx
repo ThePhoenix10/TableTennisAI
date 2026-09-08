@@ -1,5 +1,6 @@
 
 import Link from "next/link";
+import { UploadSection } from "@/components/upload-section";
 import { WhatThisMeasures } from "@/components/what-this-measures";
 import { formatClock } from "@/lib/analysis";
 import {
@@ -116,24 +117,7 @@ export default async function HomePage() {
         </ul>
       </section>
 
-      <section aria-labelledby="upload-heading" className="mt-12 max-w-2xl">
-        <h2 id="upload-heading" className="text-lg font-semibold">
-          Upload
-        </h2>
-        <div className="rounded-card border-border bg-surface mt-4 border p-5">
-          <button
-            type="button"
-            disabled
-            aria-describedby="upload-note"
-            className="bg-brand text-on-brand rounded px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Upload a match
-          </button>
-          <p id="upload-note" className="text-ink-muted mt-3 text-sm">
-            Upload is coming. For now, try the demo above.
-          </p>
-        </div>
-      </section>
+      <UploadSection />
 
       <section className="mt-16 max-w-3xl">
         <WhatThisMeasures />

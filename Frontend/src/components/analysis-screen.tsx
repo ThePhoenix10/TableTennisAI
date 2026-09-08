@@ -10,6 +10,7 @@ import {
   shotIndexAt,
 } from "@/lib/analysis";
 import { loadCropTrack, type CropTrack } from "@/lib/real-demo";
+import { loadLiveAnalysis, loadLiveCropTrack } from "@/lib/live-analysis";
 import {
   buildSegments,
   isInSegment,
@@ -41,7 +42,23 @@ import { WhatThisMeasures } from "./what-this-measures";
 /** How long after contact a shot still counts as "in progress" on screen. */
 const SHOT_HOLD_S = (97 - CONTACT_INDEX) / GRID_FPS;
 
-export function AnalysisScreen({ id }: { id: string }) {
+/**
+ * Renders one match, whether it came from the bundled demos or from the API.
+ *
+ * `live` switches only where the bytes are fetched from. Everything below —
+ * timeline, findings, evidence mode, the pose panels — is deliberately shared,
+ * because a separate screen for real analyses is how the two drift apart.
+ */
+export function AnalysisScreen({
+  id,
+  live = false,
+  title,
+}: {
+  id: string;
+  live?: boolean;
+  /** Shown instead of the demo registry's title. Live analyses have none. */
+  title?: string;
+}) {
   const [file, setFile] = useState<AnalysisFile | null>(null);
   const [poses, setPoses] = useState<Float32Array | null>(null);
   const [track, setTrack] = useState<CropTrack | null>(null);
@@ -56,7 +73,11 @@ export function AnalysisScreen({ id }: { id: string }) {
   /** Skip the dead air between points. */
   const [ralliesOnly, setRalliesOnly] = useState(false);
 
-  const demo = getDemoMatch(id);
+  const demo = live ? undefined : getDemoMatch(id);
+  // A live analysis is real footage by definition. `isSyntheticDemo` defaults
+  // to true for unknown ids, so asking it about a job id would label a genuine
+  // analysis a fixture and show the "regenerate the demo data" banners.
+  const synthetic = !live && isSyntheticDemo(id);
   // The element lives in state, not a ref: the panels crop from it, so its
   // arrival has to trigger a render. A ref would populate silently.
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
@@ -75,8 +96,16 @@ export function AnalysisScreen({ id }: { id: string }) {
   // no in-effect state reset is needed here.
   useEffect(() => {
     let cancelled = false;
+    let trackUrls: { json: string; bin: string } | null = null;
 
-    loadAnalysis(id)
+    const load = live
+      ? loadLiveAnalysis(id).then((r) => {
+          trackUrls = { json: r.trackJsonUrl, bin: r.trackBinUrl };
+          return r.file;
+        })
+      : loadAnalysis(id);
+
+    load
       .then((loaded) => {
         if (cancelled) return;
         setFile(loaded);
@@ -95,7 +124,11 @@ export function AnalysisScreen({ id }: { id: string }) {
             setNotice(
               "Player crops are unavailable for this match — the crop track could not be loaded.",
             );
-          void loadCropTrack(id)
+          void (
+            live && trackUrls
+              ? loadLiveCropTrack(trackUrls.json, trackUrls.bin)
+              : loadCropTrack(id)
+          )
             .then((t) => {
               if (cancelled) return;
               setTrack(t);
@@ -119,7 +152,7 @@ export function AnalysisScreen({ id }: { id: string }) {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, live]);
 
   const shots = useMemo(() => file?.shots ?? [], [file]);
   const rallies = useMemo(() => buildRallies(shots), [shots]);
@@ -280,7 +313,7 @@ export function AnalysisScreen({ id }: { id: string }) {
     return (
       <div className="mx-auto max-w-[1280px] px-4 py-16 sm:px-6">
         <p className="text-base">{error}</p>
-        {isSyntheticDemo(id) && (
+        {synthetic && (
           <p className="text-ink-muted mt-2 text-sm">
             Synthetic fixtures are generated — try{" "}
             <code>npm run generate:demo</code>.
@@ -355,7 +388,7 @@ export function AnalysisScreen({ id }: { id: string }) {
     <div className="mx-auto flex max-w-[1280px] flex-col gap-4 px-4 py-6 sm:px-6">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
         <h1 className="text-lg font-semibold tracking-tight">
-          {demo?.title ?? file.video_id}
+          {demo?.title ?? title ?? file.video_id}
           <span className="text-ink-muted ml-2 font-mono text-sm font-normal">
             {file.video_id}
           </span>
@@ -377,7 +410,7 @@ export function AnalysisScreen({ id }: { id: string }) {
 
       {/* Keyed off the registry, not off a field the real export happens to
           omit, so a malformed file can never pass itself off as real. */}
-      {isSyntheticDemo(id) && (
+      {synthetic && (
         <p className="border-border bg-surface text-ink-muted rounded-card border p-3 text-xs">
           Demo data is synthetic — generated to exercise the interface. The
           numbers describe no real match.

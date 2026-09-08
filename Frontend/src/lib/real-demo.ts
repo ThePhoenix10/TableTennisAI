@@ -89,9 +89,24 @@ export interface CropTrack {
  */
 export async function loadCropTrack(id: string): Promise<CropTrack | null> {
   const base = `/demo/${id}/${id}`;
+  return loadCropTrackFrom(`${base}.track.json`, `${base}.track.bin`, id);
+}
+
+/**
+ * Fetch and validate a crop track from explicit URLs.
+ *
+ * Demos build their URLs from the folder convention; live analyses receive
+ * signed blob URLs from the API. The parsing and the length check are the
+ * same either way, so they live here rather than in both callers.
+ */
+export async function loadCropTrackFrom(
+  headerUrl: string,
+  binUrl: string,
+  label: string,
+): Promise<CropTrack | null> {
   const [headerRes, binRes] = await Promise.all([
-    fetch(`${base}.track.json`),
-    fetch(`${base}.track.bin`),
+    fetch(headerUrl),
+    fetch(binUrl),
   ]);
   if (!headerRes.ok || !binRes.ok) return null;
 
@@ -103,7 +118,7 @@ export async function loadCropTrack(id: string): Promise<CropTrack | null> {
   const expected = header.n_frames * header.stride;
   if (data.length < expected) {
     console.warn(
-      `Crop track for ${id} is short: ${data.length} of ${expected} int16 values`,
+      `Crop track for ${label} is short: ${data.length} of ${expected} int16 values`,
     );
   }
   return { header, data };
