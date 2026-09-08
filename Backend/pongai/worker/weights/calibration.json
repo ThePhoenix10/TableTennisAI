@@ -1,0 +1,25 @@
+{
+  "temperature": 2.2024576663970947,
+  "ece_before": 0.12554797917271462,
+  "ece_after": 0.008781630358549463,
+  "accuracy": 0.7660614525139665,
+  "mean_conf_before": 0.8923077583312988,
+  "mean_conf_after": 0.7579606771469116,
+  "abstain_floor": 0.3,
+  "acc_target": 0.85,
+  "fitted_on": "lovo_oof",
+  "kept_fraction": 0.9993016759776536,
+  "acc_at_floor": 0.7575122292103424,
+  "per_class_thresholds": {
+    "serve": 0.25,
+    "attack": 0.5,
+    "control": 1.01,
+    "defence": 1.01
+  },
+  "min_keep": 0.15,
+  "coachable_fraction": 0.5970670391061452,
+  "precision_on_kept": 0.8935672514619883,
+  "rally_gap_s": 1.5,
+  "rally_boundary_f1": 0.7692307692307692,
+  "rally_mean_len": 6.066666666666666
+}

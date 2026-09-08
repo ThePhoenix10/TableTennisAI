@@ -4,34 +4,72 @@ rally grouping.
 """
 from __future__ import annotations
 
+from collections import Counter
+
 import numpy as np
 import torch
 
-from pongai.core.schema import CLASS_PRECISION, ShotClass
+from pongai.core.schema import ShotClass
 from pongai.worker.stages.geometry import (
     L_ANK, L_ELB, L_HIP, L_KNE, L_SHO, L_WRI, PRE_FRAMES, R_ANK, R_ELB, R_HIP,
     R_KNE, R_SHO, R_WRI, WINDOW_FRAMES, angle, window_at,
 )
 
-CLASSES = ["serve", "attack", "control", "defence"]
+# Derived from the enum, not retyped. This list is what maps a logit index to
+# a label, and GET /api/limits publishes the same ordering to the frontend as
+# `model.shot_classes` — a hand-kept copy that drifted would silently relabel
+# every shot rather than fail.
+CLASSES = [c.value for c in ShotClass]
 TECHS = ["block", "chop", "flick", "lob", "loop", "push", "serve", "smash"]
 
 DET_THR = 0.60
 NMS_GAP = 30              # 0.25s — you cannot physically strike twice faster
 RALLY_GAP_S = 1.5         # validated against 282 annotated rally endings
 
+# DetNet is fully convolutional over time, so a span is normally one forward
+# pass. A 5-minute clip on the 120fps grid is ~36k timesteps x 128 channels
+# through 14 dilated convs, which is the largest allocation in the pipeline
+# and the most likely OOM — and an OOM here loses the whole run.
+#
+# Chunking is exact rather than approximate: the receptive field is 2,033
+# frames (+/-1,016), so discarding a 2,048-frame margin from each interior
+# edge leaves outputs identical to the single-pass result. BatchNorm is in
+# eval mode, so it uses running statistics and is unaffected by the split.
+DET_CHUNK = 16384
+DET_MARGIN = 2048
 
-def detect_contacts(det_net, st, dmu, dsd, device="cuda"):
+
+def _det_windows(a: int, b: int):
+    """(read_from, read_to, keep_from, keep_to) covering [a, b) exactly once.
+
+    Interior edges are padded by DET_MARGIN and the padding discarded, so
+    every kept output saw its full receptive field.
+    """
+    if b - a <= DET_CHUNK:
+        yield a, b, a, b
+        return
+    pos = a
+    while pos < b:
+        keep_to = min(pos + DET_CHUNK, b)
+        yield (max(a, pos - DET_MARGIN), min(b, keep_to + DET_MARGIN),
+               pos, keep_to)
+        pos = keep_to
+
+
+def detect_contacts(det_net, st, dmu, dsd, device="cpu"):
     """Per-frame contact probability + side, then peak-picking."""
     prob = np.zeros(len(st["X"]), np.float32)
     side = np.zeros(len(st["X"]), np.float32)
     with torch.no_grad():
         for a, b in st["spans"]:
-            x = torch.tensor(((st["X"][a:b] - dmu) / dsd).T[None],
-                             dtype=torch.float32, device=device)
-            lc, ls = det_net(x)
-            prob[a:b] = torch.sigmoid(lc)[0].cpu().numpy()
-            side[a:b] = torch.sigmoid(ls)[0].cpu().numpy()
+            for r0, r1, k0, k1 in _det_windows(a, b):
+                x = torch.tensor(((st["X"][r0:r1] - dmu) / dsd).T[None],
+                                 dtype=torch.float32, device=device)
+                lc, ls = det_net(x)
+                off = k0 - r0
+                n = k1 - k0
+                prob[k0:k1] = torch.sigmoid(lc)[0].cpu().numpy()[off:off + n]
+                side[k0:k1] = torch.sigmoid(ls)[0].cpu().numpy()[off:off + n]
     return prob, side
 
 
@@ -50,7 +88,7 @@ def decode_peaks(prob, thr=DET_THR, gap=NMS_GAP):
 
 
 def classify(cls_net, st, peaks, sides, cmu, csd, temperature,
-             device="cuda"):
+             device="cpu"):
     """Temperature-scaled so confidence means what it says.
 
     The final model trained to a loss of 0.0042 and reported 95.7% mean
@@ -158,8 +196,7 @@ def build_shots(peaks, sides, pr, pt, kps, vals, sels, st, source_fps,
     src_frames = st["src"][peaks]
     ts = src_frames / source_fps
     rid, sidx = group_rallies(ts)
-    import pandas as pd
-    rlen = pd.Series(rid).value_counts().to_dict()
+    rlen = Counter(rid.tolist())
 
     shots = []
     for n, (i, s) in enumerate(zip(peaks, sides)):
