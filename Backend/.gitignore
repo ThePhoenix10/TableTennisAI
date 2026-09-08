@@ -1,0 +1,17 @@
+# Secrets — AZURE_STORAGE_CONNECTION_STRING contains the account key, which
+# grants full control of the storage account. Never commit it.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# macOS
+.DS_Store

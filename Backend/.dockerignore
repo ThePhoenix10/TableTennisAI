@@ -1,7 +1,18 @@
+# Secrets — the build context is uploaded to ACR, so anything here leaves the
+# machine even when the Dockerfile never COPYs it.
+.env
+.env.*
+!.env.example
+
 **/__pycache__
 **/*.pyc
-.git
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
 .venv
+venv
 tests/
 infra/
+scripts/
 *.md
+.DS_Store

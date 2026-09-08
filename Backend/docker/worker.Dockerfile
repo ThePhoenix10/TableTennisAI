@@ -16,11 +16,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Heavy layers first so code changes don't invalidate them.
+# torchvision alongside torch, from the same index: ultralytics needs it for
+# NMS, and resolving it from PyPI instead gives a build compiled against a
+# different torch, which fails at the first detector call.
 RUN pip install --no-cache-dir \
-      torch --index-url https://download.pytorch.org/whl/cu124
+      torch torchvision --index-url https://download.pytorch.org/whl/cu124
 RUN pip install --no-cache-dir \
       "onnxruntime-gpu==1.22.0" ultralytics \
-      opencv-python-headless numpy pandas pyarrow tqdm \
+      opencv-python-headless numpy pandas tqdm \
       azure-storage-blob azure-storage-queue azure-data-tables pydantic
 
 # rtmlib declares CPU onnxruntime as a hard dependency, which shadows the GPU

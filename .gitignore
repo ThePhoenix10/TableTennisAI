@@ -1,0 +1,9 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Local environment files live next to the service that reads them, and each
+# has its own .gitignore. This catches any stray one at the root.
+.env
+.env.*
+!.env.example

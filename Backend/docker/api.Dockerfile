@@ -9,7 +9,9 @@ COPY pyproject.toml ./
 COPY pongai/__init__.py       ./pongai/__init__.py
 COPY pongai/core               ./pongai/core
 COPY pongai/api                ./pongai/api
-RUN pip install --no-cache-dir .
+# ".[api]", not ".". fastapi and uvicorn are optional-dependencies, so a bare
+# install omits them and the CMD below fails with "uvicorn: not found".
+RUN pip install --no-cache-dir ".[api]"
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \

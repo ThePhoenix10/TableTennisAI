@@ -15,7 +15,13 @@ jobs:
     runs-on: ubuntu-latest
     name: Build and Deploy Job
     env:
-      NEXT_PUBLIC_API_BASE_URL: ${{ secrets.AZURE_FUNCTION_URL }}
+      # Read by src/lib/api.ts. The old name (NEXT_PUBLIC_API_BASE_URL) was
+      # never read by anything, and pointed at the retired Function App.
+      #
+      # NEXT_PUBLIC_* is inlined into the client bundle, so this is public by
+      # construction and belongs in the workflow rather than in a secret. It
+      # must be set for the BUILD step, since a static export bakes it in.
+      NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL || 'https://pongai-api.happybeach-8a11c411.westus3.azurecontainerapps.io' }}
     steps:
       - uses: actions/checkout@v4
         with:
