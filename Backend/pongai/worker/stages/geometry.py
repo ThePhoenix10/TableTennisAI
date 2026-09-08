@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from pongai.core.schema import CONTACT_INDEX, GRID_FPS, WINDOW_FRAMES
+
 # COCO-17
 NOSE = 0
 L_SHO, R_SHO, L_ELB, R_ELB, L_WRI, R_WRI = 5, 6, 7, 8, 9, 10
@@ -29,9 +31,13 @@ EDGES = [(5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12),
 
 # Window: asymmetric on purpose. A block's defining property is the ABSENCE of
 # a backswing, so pre-contact carries more class information than follow-through.
-PRE_FRAMES, POST_FRAMES = 60, 36
-WINDOW_FRAMES = PRE_FRAMES + POST_FRAMES + 1     # 97
-GRID_FPS = 120
+#
+# Derived from core.schema, not redeclared. These numbers are baked into the
+# trained checkpoints AND published to the frontend at GET /api/limits, so a
+# second copy here could put the served window geometry and the computed one
+# out of step with nothing failing.
+PRE_FRAMES = CONTACT_INDEX                        # 60
+POST_FRAMES = WINDOW_FRAMES - CONTACT_INDEX - 1   # 36
 
 CONF_MIN = 0.35
 
@@ -169,7 +175,11 @@ def build_stream(raw: dict, table: np.ndarray | None) -> dict:
 
     return dict(
         X=np.nan_to_num(np.concatenate(ch, 1).astype(np.float32)),
-        kp=np.stack(kps, 1), val=np.stack(vals, 1),
+        # Sanitised for the same reason X is. `kp` feeds the kinematics, and a
+        # NaN there survives all the way into shots.json as a bare `NaN`
+        # literal — which is not valid JSON, so the finished analysis becomes
+        # permanently unreadable. `val` still marks which joints to trust.
+        kp=np.nan_to_num(np.stack(kps, 1)), val=np.stack(vals, 1),
         td=np.nan_to_num(np.stack(tds, 1)),
         fidx=raw["frame_idx"],
         src=raw.get("src_frame", raw["frame_idx"].astype(np.float32)),

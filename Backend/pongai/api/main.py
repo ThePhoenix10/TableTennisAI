@@ -13,7 +13,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
+from pongai.api import errors
 from pongai.api.routes import analyses, jobs, meta, uploads
 from pongai.core.storage import get_storage
 
@@ -30,7 +32,8 @@ async def lifespan(app: FastAPI):
         log.info("storage ready")
     except Exception as e:
         # Let the container start so /health responds and the platform can
-        # report the problem, rather than crash-looping.
+        # report the problem, rather than crash-looping. Requests then fail
+        # with a 503 from the handlers in `errors`, not an opaque 500.
         log.error("storage init failed: %s", e)
     yield
 
@@ -42,13 +45,31 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+errors.install(app)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in os.getenv(
         "ALLOWED_ORIGINS", "http://localhost:3000").split(",") if o.strip()],
-    allow_methods=["GET", "POST"],
+    # Every method the API actually exposes. DELETE and OPTIONS are easy to
+    # forget: the browser preflights any non-simple method, and a missing entry
+    # surfaces as "400 Disallowed CORS method" from the middleware rather than
+    # anything resembling a routing problem.
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    # The browser reads Content-Type off the SSE and JSON responses; without
+    # this it cannot see any non-safelisted response header.
+    expose_headers=["Content-Type", "Cache-Control"],
+    max_age=3600,
 )
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    """The bare host answered 404, which reads as a broken deployment when
+    someone opens the API URL to check it is up."""
+    return RedirectResponse("/docs")
+
 
 for r in (meta.router, uploads.router, jobs.router, analyses.router):
     app.include_router(r, prefix="/api")

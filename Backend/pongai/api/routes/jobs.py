@@ -9,14 +9,24 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
+from pongai.api.deps import job_id as job_id_dep
 from pongai.api.deps import job_or_404, storage
+from pongai.api.errors import ApiError
 from pongai.core.progress import STAGE_LABELS
-from pongai.core.schema import Job, JobStatus
-from pongai.core.storage import Storage
+from pongai.core.schema import (
+    MAX_ATTEMPTS,
+    STALE_AFTER_S,
+    Job,
+    JobStatus,
+    SourceVideo,
+    SubmitJobResponse,
+)
+from pongai.core.storage import OUTPUTS_CONTAINER, UPLOADS_CONTAINER, Storage
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["jobs"])
@@ -24,9 +34,12 @@ router = APIRouter(tags=["jobs"])
 POLL_INTERVAL_S = 2.0
 KEEPALIVE_S = 15.0
 MAX_STREAM_S = 3600.0
+# Told to the browser explicitly rather than left to EventSource's default,
+# which varies by engine.
+CLIENT_RETRY_MS = 3000
 
 
-@router.get("/jobs/{job_id}", response_model=Job)
+@router.get("/jobs/{job_id}", response_model=Job, summary="Poll one job")
 def get_job(job: Job = Depends(job_or_404)) -> Job:
     """Polling fallback for SSE.
 
@@ -37,11 +50,145 @@ def get_job(job: Job = Depends(job_or_404)) -> Job:
     return job
 
 
-@router.get("/jobs", response_model=list[Job])
-def list_jobs(limit: int = Query(50, le=200),
+@router.get("/jobs", response_model=list[Job], summary="Recent jobs")
+def list_jobs(limit: int = Query(50, ge=1, le=200),
               store: Storage = Depends(storage)) -> list[Job]:
     """History. Analyses take ~30 minutes; nobody sits and watches."""
     return store.list_jobs(limit)
+
+
+# Short-lived on purpose. This is the user's raw footage, not a published
+# result, and the link only has to outlive one sitting with the player.
+SOURCE_SAS_HOURS = 2
+
+# Statuses where a worker may be actively reading the blob. Deleting underneath
+# it produces a confusing mid-pipeline failure, so these are refused — unless
+# the job has gone silent long enough that the replica is certainly gone.
+BUSY_STATUSES = (JobStatus.VALIDATING, JobStatus.PROCESSING)
+
+
+def _source_path(job: Job) -> str:
+    return f"{job.job_id}/{job.filename or 'input.mp4'}"
+
+
+@router.get("/jobs/{job_id}/source", response_model=SourceVideo,
+            summary="A short-lived link to the uploaded video",
+            responses={410: {"description": "the upload is no longer stored"}})
+def source(job: Job = Depends(job_or_404),
+           store: Storage = Depends(storage)) -> SourceVideo:
+    """The raw upload, for playback before any analysis exists.
+
+    GET /analyses/{id} only answers once a job is DONE and serves the RENDERED
+    video from `outputs`. This serves what the user actually uploaded, so a
+    clip can be watched back the moment it lands.
+    """
+    path = _source_path(job)
+    if not store.blob_exists(UPLOADS_CONTAINER, path):
+        # Either the PUT never completed, or the 7-day lifecycle rule has
+        # since removed it. Both mean the same thing to a viewer.
+        raise ApiError(410, "source_unavailable",
+                       "This video is no longer stored.")
+
+    return SourceVideo(
+        job_id=job.job_id,
+        url=store.read_sas(UPLOADS_CONTAINER, path, hours=SOURCE_SAS_HOURS),
+        filename=job.filename,
+        size_bytes=job.size_bytes,
+        expires_in_s=SOURCE_SAS_HOURS * 3600,
+    )
+
+
+@router.delete("/jobs/{job_id}", status_code=204,
+               summary="Delete a job and everything it stored",
+               responses={409: {"description": "currently being processed"}})
+def delete_job(job: Job = Depends(job_or_404),
+               store: Storage = Depends(storage)) -> Response:
+    """Remove the upload, any analysis outputs, and the job row.
+
+    Irreversible: blob soft-delete is disabled on the account, so nothing here
+    can be recovered afterwards. The client is expected to confirm first.
+    """
+    if job.status in BUSY_STATUSES and job.seconds_since_update <= STALE_AFTER_S:
+        raise ApiError(409, "job_busy",
+                       "This video is being analysed. Wait for it to finish "
+                       "before deleting it.",
+                       status=job.status.value, progress=job.progress)
+
+    # Blobs first. A row with no blobs is recoverable noise; blobs with no row
+    # are invisible and bill indefinitely.
+    removed = store.delete_prefix(UPLOADS_CONTAINER, f"{job.job_id}/")
+    removed += store.delete_prefix(OUTPUTS_CONTAINER, f"{job.job_id}/")
+    store.delete_job(job)
+    log.info("job %s deleted (%d blobs)", job.job_id, removed)
+
+    return Response(status_code=204)
+
+
+@router.post("/jobs/{job_id}/retry", response_model=SubmitJobResponse,
+             summary="Re-queue a failed job",
+             responses={409: {"description": "not in a retryable state"},
+                        410: {"description": "the uploaded video has expired"}})
+def retry(job_id: str = Depends(job_id_dep),
+          job: Job = Depends(job_or_404),
+          store: Storage = Depends(storage)) -> SubmitJobResponse:
+    """Run the same job again, on the same uploaded file.
+
+    The upload is not repeated — the source blob is still there, so a retry
+    costs the analysis and nothing else. The job id is stable, so whatever the
+    client already holds (its stream URL, its bookmark) keeps working.
+
+    Retries are explicit rather than automatic. A failure that is going to
+    happen again should not silently burn three cold starts before anyone
+    hears about it, and the user is the one who knows whether it is worth
+    another ~30 minutes.
+    """
+    if job.status is JobStatus.REJECTED:
+        raise ApiError(409, "not_retryable",
+                       "This video cannot be analysed, so trying again would "
+                       "reach the same result. Please upload a different "
+                       "recording.", rejections=job.rejections)
+    if job.status is JobStatus.DONE:
+        raise ApiError(409, "already_done",
+                       "This analysis already finished.",
+                       analysis_url=f"/api/analyses/{job.job_id}")
+    if job.status is JobStatus.AWAITING_UPLOAD:
+        raise ApiError(409, "never_submitted",
+                       "This upload was never submitted for analysis.")
+    if job.attempts >= MAX_ATTEMPTS:
+        raise ApiError(409, "attempts_exhausted",
+                       f"This job has already been attempted {job.attempts} "
+                       f"times. Please upload the recording again.",
+                       attempts=job.attempts, max_attempts=MAX_ATTEMPTS)
+    if not job.can_retry:
+        # QUEUED, or running and still writing progress.
+        raise ApiError(409, "still_running",
+                       "This job is still being processed.",
+                       status=job.status.value,
+                       progress=job.progress)
+
+    # Raw uploads are deleted after 7 days by the storage lifecycle rule, so a
+    # job can outlive the file it was made from. Checked before enqueueing:
+    # otherwise the worker would spend a cold start to discover it and the
+    # user would get a second, slower, less clear failure.
+    blob_path = f"{job.job_id}/{job.filename or 'input.mp4'}"
+    if not store.blob_exists(UPLOADS_CONTAINER, blob_path):
+        raise ApiError(410, "source_expired",
+                       "The uploaded video is no longer available. Uploads "
+                       "are kept for 7 days. Please upload it again.")
+
+    depth = store.queue_depth()
+    job.reset_for_retry()
+    store.put_job(job)
+    store.enqueue(job.job_id)
+    log.info("job %s retry #%d queued behind %d", job.job_id, job.attempts, depth)
+
+    est = None
+    if job.probe or job.client_probe:
+        p = job.probe or job.client_probe
+        est = p.estimated_gpu_seconds * (depth + 1) + 240
+
+    return SubmitJobResponse(job_id=job.job_id, status=job.status,
+                             queue_position=depth, estimated_wait_s=est)
 
 
 def _event(name: str, payload: dict) -> str:
@@ -82,32 +229,58 @@ def _message(job: Job) -> str:
     return "Processing."
 
 
-@router.get("/jobs/{job_id}/stream")
-async def stream(job_id: str, request: Request,
+@router.get("/jobs/{job_id}/stream", summary="SSE progress")
+async def stream(request: Request, job_id: str = Depends(job_id_dep),
                  store: Storage = Depends(storage)) -> StreamingResponse:
     """Server-sent events until the job reaches a terminal state.
 
-    Client should close on `done` or `error`, and fall back to polling
-    GET /jobs/{id} if the stream drops and EventSource cannot reconnect.
+    Client should close on `done` or `error`. On `timeout` — which is not a
+    failure, just this connection's 60-minute cap — it should reconnect. If
+    the stream drops and EventSource cannot reconnect, fall back to polling
+    GET /jobs/{id}.
     """
 
     async def gen():
         last: dict | None = None
-        elapsed = 0.0
-        since_keepalive = 0.0
+        warned = False
+        # Wall clock, not a count of sleeps: each iteration also costs a table
+        # read, so summing POLL_INTERVAL_S drifts long and the 60-minute cap
+        # would fire late.
+        started = time.monotonic()
+        last_keepalive = started
 
-        while elapsed < MAX_STREAM_S:
+        yield f"retry: {CLIENT_RETRY_MS}\n\n"
+
+        while time.monotonic() - started < MAX_STREAM_S:
             if await request.is_disconnected():
                 log.info("client disconnected from job %s stream", job_id)
                 return
 
             # blocking SDK call — off the event loop so one slow read does not
             # stall every other connection
-            job = await asyncio.to_thread(store.get_job, job_id)
+            try:
+                job = await asyncio.to_thread(store.get_job, job_id)
+            except Exception:
+                # A transient storage error must not kill a 40-minute stream;
+                # the next poll will very likely succeed.
+                log.warning("job %s stream: storage read failed", job_id,
+                            exc_info=True)
+                await asyncio.sleep(POLL_INTERVAL_S)
+                continue
+
             if job is None:
-                yield _event("error", {"code": "not_found",
-                                       "message": f"job {job_id} not found"})
+                yield _event("error", {"code": "job_not_found",
+                                       "message": f"Job {job_id} not found."})
                 return
+
+            # Non-blocking problems, sent once. The user is about to wait half
+            # an hour; they should know now that swing speed will be missing.
+            if not warned and job.warnings:
+                warned = True
+                yield _event("warning", {
+                    "job_id": job_id,
+                    "warnings": [w.model_dump(mode="json")
+                                 for w in job.warnings]})
 
             snap = _snapshot(job)
             if snap != last:
@@ -116,7 +289,7 @@ async def stream(job_id: str, request: Request,
                 last = dict(snap)
                 snap["message"] = _message(job)
                 yield _event("status", snap)
-                since_keepalive = 0.0
+                last_keepalive = time.monotonic()
 
             if job.status == JobStatus.DONE:
                 yield _event("done", {
@@ -126,6 +299,7 @@ async def stream(job_id: str, request: Request,
 
             if job.status in (JobStatus.FAILED, JobStatus.REJECTED):
                 yield _event("error", {
+                    "job_id": job_id,
                     "code": job.error_code or job.status.value,
                     "message": job.error_message or _message(job),
                     "rejections": [r.model_dump(mode="json")
@@ -135,19 +309,22 @@ async def stream(job_id: str, request: Request,
 
             # Without periodic traffic the ingress or an intermediate proxy
             # closes an idle connection.
-            if since_keepalive >= KEEPALIVE_S:
+            if time.monotonic() - last_keepalive >= KEEPALIVE_S:
                 yield ": ping\n\n"
-                since_keepalive = 0.0
+                last_keepalive = time.monotonic()
 
             await asyncio.sleep(POLL_INTERVAL_S)
-            elapsed += POLL_INTERVAL_S
-            since_keepalive += POLL_INTERVAL_S
 
-        yield _event("error", {"code": "stream_timeout",
-                               "message": "Stream timed out. Reconnecting."})
+        # Not a failure. Its own event name so the client reconnects rather
+        # than treating it as `error` and closing, which is what the documented
+        # "close on done or error" contract would otherwise make it do.
+        yield _event("timeout", {
+            "job_id": job_id,
+            "message": "This connection reached its time limit. Reconnecting.",
+            "reconnect": True})
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={
-        "Cache-Control": "no-cache",
+        "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",
         "X-Accel-Buffering": "no",     # or the proxy buffers and nothing arrives
     })

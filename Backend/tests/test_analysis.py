@@ -1,6 +1,13 @@
-"""Peak decoding, rally grouping, frame-rate gating. No GPU needed."""
+"""Peak decoding, rally grouping, frame-rate gating. No GPU needed.
+
+No GPU, but the module under test imports torch, so this file needs the
+`worker` extra. Skipped rather than failing collection, which used to take the
+whole suite down on a machine with only the API deps installed.
+"""
 import numpy as np
 import pytest
+
+pytest.importorskip("torch", reason="pip install -e '.[worker]'")
 
 from pongai.worker.stages.analysis import decode_peaks, group_rallies, kinematics
 from pongai.worker.stages.geometry import PRE_FRAMES, WINDOW_FRAMES

@@ -7,9 +7,11 @@ size limits.
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.data.tables import TableServiceClient
@@ -21,7 +23,7 @@ from azure.storage.blob import (
 )
 from azure.storage.queue import QueueClient, QueueServiceClient
 
-from pongai.core.schema import Job, JobStatus, utcnow
+from pongai.core.schema import Job, utcnow
 from pongai.core.validation import Limits
 
 UPLOADS_CONTAINER = "uploads"
@@ -29,6 +31,16 @@ OUTPUTS_CONTAINER = "outputs"
 DEMOS_CONTAINER = "demos"
 JOB_QUEUE = "analysis-jobs"
 JOB_TABLE = "jobs"
+
+# Job ids are `uuid4().hex[:16]`. Enforced here rather than only at the API
+# edge because the worker reaches get_job with the queue message body, which
+# never passes through a route — and the id is interpolated into an OData
+# filter below, where a quote would change the query.
+JOB_ID_RE = re.compile(r"^[0-9a-f]{16}$")
+
+
+def is_job_id(value: str) -> bool:
+    return bool(JOB_ID_RE.fullmatch(value or ""))
 
 
 class Storage:
@@ -121,10 +133,30 @@ class Storage:
         except ResourceNotFoundError:
             return None
 
+    def delete_blob(self, container: str, path: str) -> bool:
+        """Returns whether anything was there to delete."""
+        try:
+            self.blob.get_blob_client(container, path).delete_blob()
+            return True
+        except ResourceNotFoundError:
+            return False
+
+    def delete_prefix(self, container: str, prefix: str) -> int:
+        """Delete every blob under a prefix. Used to drop a job's outputs,
+        which are five separate blobs under `{job_id}/`."""
+        client = self.blob.get_container_client(container)
+        n = 0
+        for b in client.list_blobs(name_starts_with=prefix):
+            try:
+                client.delete_blob(b.name)
+                n += 1
+            except ResourceNotFoundError:
+                pass
+        return n
+
     def read_json(self, container: str, path: str) -> dict:
-        import json as _json
         data = self.blob.get_blob_client(container, path).download_blob().readall()
-        return _json.loads(data)
+        return json.loads(data)
 
     def download(self, container: str, path: str, dest: str) -> None:
         with open(dest, "wb") as f:
@@ -148,6 +180,19 @@ class Storage:
     def queue_depth(self) -> int:
         return self._queue().get_queue_properties().approximate_message_count or 0
 
+    def receive_messages(self, max_messages: int, visibility_s: int):
+        """Lease up to `max_messages` job ids.
+
+        `visibility_s` must exceed the container job's replica timeout, or a
+        long run makes its own message visible again while it is still going
+        and a second replica repeats the work.
+        """
+        return self._queue().receive_messages(
+            messages_per_page=max_messages, visibility_timeout=visibility_s)
+
+    def delete_message(self, message) -> None:
+        self._queue().delete_message(message)
+
     def _queue(self) -> QueueClient:
         return self.queue_svc.get_queue_client(JOB_QUEUE)
 
@@ -161,7 +206,7 @@ class Storage:
         return {
             "PartitionKey": job.created_at.strftime("%Y-%m"),
             "RowKey": job.job_id,
-            "payload": __import__("json").dumps(d),
+            "payload": json.dumps(d),
             "status": job.status.value,
             "created_at": job.created_at.isoformat(),
         }
@@ -172,22 +217,39 @@ class Storage:
             .upsert_entity(self._entity(job))
 
     def get_job(self, job_id: str) -> Job | None:
-        import json as _json
-        client = self.table_svc.get_table_client(JOB_TABLE)
-        # RowKey is unique; partition is unknown without the creation month
-        rows = list(client.query_entities(
-            f"RowKey eq '{job_id}'", results_per_page=1))
-        if not rows:
+        if not is_job_id(job_id):
             return None
-        return Job.model_validate(_json.loads(rows[0]["payload"]))
+        client = self.table_svc.get_table_client(JOB_TABLE)
+        # RowKey is unique; partition is unknown without the creation month.
+        # `next` rather than `list`: results_per_page is a page SIZE, not a
+        # limit, so list() walked every matching row one HTTP request at a
+        # time. This is polled every 2s per open SSE stream.
+        row = next(iter(client.query_entities(
+            f"RowKey eq '{job_id}'", results_per_page=1)), None)
+        return Job.model_validate(json.loads(row["payload"])) if row else None
+
+    def delete_job(self, job: Job) -> None:
+        """Remove the job row. Its blobs are removed separately by the caller,
+        blobs first — a row with no blobs is recoverable noise, whereas blobs
+        with no row are invisible and bill forever."""
+        self.table_svc.get_table_client(JOB_TABLE).delete_entity(
+            job.created_at.strftime("%Y-%m"), job.job_id)
 
     def list_jobs(self, limit: int = 50) -> list[Job]:
-        import json as _json
+        """Recent jobs, newest first.
+
+        Spans two month partitions. Querying only the current one meant that
+        at 00:00 on the 1st every job silently vanished from the history page.
+        """
         client = self.table_svc.get_table_client(JOB_TABLE)
-        part = utcnow().strftime("%Y-%m")
-        rows = list(client.query_entities(
-            f"PartitionKey eq '{part}'", results_per_page=limit))
-        jobs = [Job.model_validate(_json.loads(r["payload"])) for r in rows]
+        now = utcnow()
+        prev = (now.replace(day=1) - timedelta(days=1))
+        parts = {now.strftime("%Y-%m"), prev.strftime("%Y-%m")}
+        flt = " or ".join(f"PartitionKey eq '{p}'" for p in sorted(parts))
+
+        jobs = []
+        for row in client.query_entities(flt, results_per_page=min(limit, 100)):
+            jobs.append(Job.model_validate(json.loads(row["payload"])))
         return sorted(jobs, key=lambda j: j.created_at, reverse=True)[:limit]
 
     def new_job_id(self) -> str:

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 SCHEMA_VERSION = 1
 
@@ -54,7 +54,9 @@ POSITION_KINEMATICS = (
 VELOCITY_KINEMATICS = (
     "peak_wrist_speed", "time_to_peak", "follow_through", "recovery_time",
 )
-MIN_FPS_FOR_VELOCITY = 60
+# Owned by validation.Limits and re-exported at the bottom of this module —
+# see the import there. Declared here as a name only so readers of the
+# kinematics split can find it.
 
 
 class Shot(BaseModel):
@@ -132,8 +134,12 @@ class AnalysisMeta(BaseModel):
     n_rallies: int
     schema_version: int = SCHEMA_VERSION
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def velocity_reliable(self) -> bool:
+        """Serialized deliberately. A plain property is invisible to
+        model_dump, which left the frontend re-deriving the 60fps rule from
+        source_fps — a second copy of a threshold that lives in core."""
         return self.source_fps >= MIN_FPS_FOR_VELOCITY
 
 
@@ -145,6 +151,41 @@ class Analysis(BaseModel):
     track_url: str
     track_bin_url: str
     thumb_url: str | None = None
+
+
+class DemoAnalysis(Analysis):
+    """A precomputed match. Same shape as a real analysis on purpose — the
+    frontend renders both through one code path, so it must not need a branch
+    to read them."""
+    is_demo: Literal[True] = True
+
+
+class SourceVideo(BaseModel):
+    """A signed link to the video a user uploaded, before any analysis.
+
+    Separate from `Analysis.video_url`, which is the RENDERED output with
+    skeletons drawn on and only exists once a job is done.
+    """
+    job_id: str
+    url: str = Field(description="read-only SAS, expires")
+    filename: str | None = None
+    size_bytes: int | None = None
+    expires_in_s: int
+
+
+class DemoSummary(BaseModel):
+    """One row of the demo index. Whatever else the index carries (title,
+    players, description) is passed through rather than dropped."""
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    video_url: str
+    # A listing row is for picking a match, not playing one. Missing sidecars
+    # are null rather than a signed URL that 404s when clicked.
+    track_url: str | None = None
+    track_bin_url: str | None = None
+    thumb_url: str | None = None
+    analysis_url: str
 
 
 # =============================================================================
@@ -163,6 +204,17 @@ class JobStatus(str, Enum):
 
 TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.REJECTED}
 
+# A retry costs a GPU cold start plus a full run, and a deterministically
+# failing job would otherwise be retryable forever.
+MAX_ATTEMPTS = 3
+
+# ProgressReporter writes at least every 2 seconds while the worker is alive,
+# so this much silence means the replica is gone — evicted, OOM-killed, or
+# timed out — not that it is busy. Such a job is stuck in PROCESSING with
+# nothing left to move it, so it is retryable even though it never reached a
+# terminal status.
+STALE_AFTER_S = 600
+
 
 class JobStage(str, Enum):
     """Coarse progress. A 5-minute clip is ~25 minutes of work, so the UI
@@ -174,6 +226,20 @@ class JobStage(str, Enum):
     CLASSIFY = "classify"
     RENDER = "render"
     UPLOAD = "upload"
+
+
+# What each stage is called for a person. Beside JobStage deliberately: these
+# are served to the browser on every job, and a copy in the frontend would be
+# one more thing to keep in step.
+STAGE_LABELS: dict[JobStage, str] = {
+    JobStage.VALIDATE:      "Checking the video",
+    JobStage.ACTIVITY_GATE: "Finding the rallies",
+    JobStage.POSE:          "Tracking body movement",
+    JobStage.DETECT:        "Detecting shots",
+    JobStage.CLASSIFY:      "Classifying strokes",
+    JobStage.RENDER:        "Rendering the analysis",
+    JobStage.UPLOAD:        "Saving results",
+}
 
 
 class Job(BaseModel):
@@ -195,14 +261,75 @@ class Job(BaseModel):
 
     error_code: str | None = None
     error_message: str | None = None
-    rejections: list["Rejection"] = []
+    rejections: list["Rejection"] = Field(
+        default=[], description="blocking reasons; set when status is rejected")
+    warnings: list["Rejection"] = Field(
+        default=[], description="severity=warn; processed with reduced capability")
 
     started_at: datetime | None = None
     finished_at: datetime | None = None
 
+    attempts: int = Field(
+        default=0, description="times this job has been enqueued")
+
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def is_terminal(self) -> bool:
         return self.status in TERMINAL_STATUSES
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def stage_label(self) -> str | None:
+        """The current stage in words. Served so a polling client shows the
+        same wording as the SSE stream without keeping its own copy."""
+        return STAGE_LABELS.get(self.stage) if self.stage else None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def can_retry(self) -> bool:
+        """Whether the UI should offer a Retry button.
+
+        Necessary but not sufficient: POST /jobs/{id}/retry also checks the
+        source video is still in storage, which this model cannot see.
+
+        REJECTED is deliberately excluded. Validation is deterministic, so a
+        retry would spend a cold start and a full run to produce the identical
+        rejection — the fix is a different video, not another attempt.
+        """
+        if self.attempts >= MAX_ATTEMPTS:
+            return False
+        if self.status is JobStatus.FAILED:
+            return True
+        if self.status in (JobStatus.VALIDATING, JobStatus.PROCESSING):
+            return self.seconds_since_update > STALE_AFTER_S
+        return False
+
+    @property
+    def seconds_since_update(self) -> float:
+        seen = self.updated_at
+        if seen.tzinfo is None:                  # tolerate a naive round-trip
+            seen = seen.replace(tzinfo=timezone.utc)
+        return (utcnow() - seen).total_seconds()
+
+    def reset_for_retry(self) -> None:
+        """Back to QUEUED with the previous run's traces cleared.
+
+        Keeps what describes the FILE — filename, size, both probes — and
+        clears what described the failed ATTEMPT. Warnings are cleared too:
+        the worker re-derives them from the same ffprobe read, so keeping them
+        would only risk showing a stale set if the rules changed.
+        """
+        self.status = JobStatus.QUEUED
+        self.attempts += 1
+        self.stage = None
+        self.progress = 0.0
+        self.eta_s = None
+        self.error_code = None
+        self.error_message = None
+        self.rejections = []
+        self.warnings = []
+        self.started_at = None
+        self.finished_at = None
 
 
 class CreateUploadRequest(BaseModel):
@@ -227,6 +354,10 @@ class CreateUploadResponse(BaseModel):
     blob_path: str
     expires_at: datetime
     max_size_bytes: int
+    # Non-blocking problems found in the client probe. The upload proceeds;
+    # the user should be told what will be missing from the result before
+    # they wait 30 minutes for it.
+    warnings: list["Rejection"] = []
 
 
 class SubmitJobResponse(BaseModel):
@@ -241,7 +372,37 @@ def utcnow() -> datetime:
 
 
 # resolve forward references
-from pongai.core.validation import Rejection, VideoProbe  # noqa: E402
+from pongai.core.validation import (  # noqa: E402
+    Limits,
+    Rejection,
+    VideoProbe,
+)
+
+MIN_FPS_FOR_VELOCITY = Limits.MIN_FPS_FOR_VELOCITY
 
 Job.model_rebuild()
 CreateUploadRequest.model_rebuild()
+CreateUploadResponse.model_rebuild()
+
+
+def model_payload() -> dict:
+    """Model capability, served to the browser alongside the limits.
+
+    CLASS_PRECISION and the kinematics split were kept here "as data rather
+    than prose so there is one place to update" — but nothing served them, so
+    the frontend had to hardcode 0.804 / 0.556 and its own list of which
+    metrics need 60fps. That is the drift `limits_payload` exists to prevent,
+    reappearing one module over.
+    """
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "class_precision": {c.value: p for c, p in CLASS_PRECISION.items()},
+        "coachable_classes": sorted(c.value for c in COACHABLE_CLASSES),
+        "shot_classes": [c.value for c in ShotClass],
+        "position_kinematics": list(POSITION_KINEMATICS),
+        "velocity_kinematics": list(VELOCITY_KINEMATICS),
+        # the threshold itself is served once, at limits.velocity_min_fps
+        "window_frames": WINDOW_FRAMES,
+        "contact_index": CONTACT_INDEX,
+        "grid_fps": GRID_FPS,
+    }

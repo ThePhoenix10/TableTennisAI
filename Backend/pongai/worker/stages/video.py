@@ -5,15 +5,11 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import time
-from pathlib import Path
 
 import cv2
 import numpy as np
 
-from pongai.worker.stages.geometry import (
-    EDGES, L_HIP, L_WRI, R_HIP, R_WRI, torso_scale,
-)
+from pongai.worker.stages.geometry import EDGES, L_WRI, R_WRI
 
 log = logging.getLogger(__name__)
 
@@ -277,7 +273,17 @@ def build_crop_track(raw, pi, src_w, src_h, out_scale, panel_aspect=360 / 540,
         heights.append(y2 - y1)
 
     if not heights:
-        raise ValueError(f"no detections for player {pi}")
+        # Occluded for the entire clip. Raising here threw away a finished
+        # pose pass, classification and render — everything except this one
+        # panel. A centred static crop plus detected_pct=0 lets the frontend
+        # hide the panel and keep the rest of the analysis.
+        log.warning("player %d never detected; emitting a static centre crop", pi)
+        crop_h = float(src_h)
+        crop_w = min(crop_h * panel_aspect, src_w)
+        centre_x = np.full(n, src_w / 2)
+        centre_y = np.full(n, src_h / 2)
+        return (centre_x * out_scale, centre_y * out_scale,
+                crop_w * out_scale, crop_h * out_scale, 0.0)
 
     crop_h = min(float(np.median(heights)) * zoom, src_h)
     crop_w = min(crop_h * panel_aspect, src_w)
@@ -332,7 +338,11 @@ def render(path, raw, out_path, src_fps, out_w=1600, crf=30, kp_thresh=0.30,
          *enc, "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out_path)],
         stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    lut = np.full(n, -1, np.int32)
+    # Sized from the data as well as the header: CAP_PROP_FRAME_COUNT lies for
+    # some containers, and a frame_idx past the reported count used to raise
+    # IndexError here — at the render stage, after ~90% of the wall time.
+    lut_n = max(n, int(raw["frame_idx"].max()) + 1) if len(raw["frame_idx"]) else n
+    lut = np.full(lut_n, -1, np.int32)
     lut[raw["frame_idx"]] = np.arange(len(raw["frame_idx"]))
     KP, SC, DT = raw["keypoints"], raw["scores"], raw["detected"]
 

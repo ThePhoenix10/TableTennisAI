@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 
 # =============================================================================
@@ -40,6 +40,12 @@ class Limits:
     # reliably at all.
     MIN_FPS = 30
     MAX_FPS = 240
+
+    # Velocity kinematics are withheld below this. The single owner of the
+    # number: schema.MIN_FPS_FOR_VELOCITY re-exports it, and /limits serves it
+    # once. It was written out four separate times, in the two modules whose
+    # whole purpose is to stop that happening.
+    MIN_FPS_FOR_VELOCITY = 60
 
     MIN_WIDTH = 640
     MIN_HEIGHT = 360
@@ -64,6 +70,11 @@ class RejectionCode(str, Enum):
     RESOLUTION_TOO_LOW = "resolution_too_low"
     RESOLUTION_TOO_HIGH = "resolution_too_high"
     ASPECT_VERTICAL = "aspect_vertical"
+    # Distinct from FPS_TOO_LOW on purpose. Both used to share that code, so a
+    # client keying on `code` could not tell "we cannot process this" from
+    # "we will process it, without swing speed" — and warnings are now their
+    # own field on the upload response and their own SSE event.
+    VELOCITY_UNAVAILABLE = "velocity_unavailable"
     TOO_FEW_FRAMES = "too_few_frames"
     UNREADABLE = "unreadable"
     NO_VIDEO_STREAM = "no_video_stream"
@@ -106,9 +117,12 @@ class VideoProbe(BaseModel):
     def frames(self) -> int:
         return self.n_frames or int(self.duration_s * self.fps)
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def velocity_reliable(self) -> bool:
-        return self.fps >= 60
+        """Serialized: the probe is echoed back on every Job, and the frontend
+        gates the swing-speed panel on this rather than re-deriving it."""
+        return self.fps >= Limits.MIN_FPS_FOR_VELOCITY
 
     @property
     def estimated_gpu_seconds(self) -> float:
@@ -188,9 +202,9 @@ def validate_probe(p: VideoProbe) -> list[Rejection]:
                     f"{L.MIN_FRAMES} are needed."))
 
     # Not a rejection — processed, with velocity metrics withheld.
-    if L.MIN_FPS <= p.fps < 60:
+    if L.MIN_FPS <= p.fps < L.MIN_FPS_FOR_VELOCITY:
         out.append(Rejection(
-            code=RejectionCode.FPS_TOO_LOW,
+            code=RejectionCode.VELOCITY_UNAVAILABLE,
             severity=Severity.WARN,
             message=f"At {p.fps:.0f}fps, swing-speed metrics will be withheld.",
             detail="Shot detection, rally structure and stroke types are "
@@ -286,6 +300,9 @@ class GeometryResult:
     players_opposed_pct: float
     frames_checked: int
     rejections: list[Rejection]
+    #: Frames where two players were visible at all — the denominator for
+    #: `players_opposed_pct`.
+    frames_with_both: int = 0
 
 
 def validate_geometry(
@@ -320,7 +337,7 @@ def validate_geometry(
     table_cls = next((k for k, v in detector.names.items()
                       if v.lower() == "table"), 1)
 
-    table_hits = opposed_hits = checked = 0
+    table_hits = opposed_hits = checked = both_visible = 0
     for f in np.linspace(total * 0.1, total * 0.9, n_samples).astype(int):
         cap.set(cv2.CAP_PROP_POS_FRAMES, int(f))
         ok, frame = cap.read()
@@ -345,7 +362,11 @@ def validate_geometry(
 
         players = xyxy[cls == player_cls]
         if len(players) < 2:
+            # One player, or none. That is dead time between rallies, not a
+            # geometry problem — the question this check asks is only
+            # answerable when there are two players to place.
             continue
+        both_visible += 1
         cx = (players[:, 0] + players[:, 2]) / 2
         if (cx < mid_x).any() and (cx >= mid_x).any():
             opposed_hits += 1
@@ -357,7 +378,17 @@ def validate_geometry(
             message="No frames could be read from this video.")])
 
     table_pct = table_hits / checked
-    opposed_pct = opposed_hits / checked
+
+    # Measured over frames where two players were actually visible, NOT over
+    # every sampled frame.
+    #
+    # Dividing by all frames conflated two unrelated things: "the camera is at
+    # a bad angle" and "nobody is playing right now". A short clip that is
+    # mostly dead time was rejected outright even though its rallies were
+    # perfectly framed — 22% opposed across the whole clip, but 100% opposed
+    # across the moments both players were on court. Whether the geometry is
+    # usable is only answerable when there are two players to place.
+    opposed_pct = opposed_hits / both_visible if both_visible else 0.0
     out: list[Rejection] = []
 
     if table_pct < 0.5:
@@ -366,15 +397,25 @@ def validate_geometry(
             message="PongAI could not find a table tennis table in this video.",
             detail=f"A table was visible in {table_pct:.0%} of sampled frames. "
                    "It needs a clear side-on view of a single table."))
+    elif both_visible == 0:
+        # Never two players anywhere in the clip: there is nothing to analyse,
+        # and the pipeline would spend the full run to reach the same answer.
+        out.append(Rejection(
+            code=RejectionCode.PLAYERS_NOT_OPPOSED,
+            message="PongAI never saw two players in this video.",
+            detail=f"Across {checked} sampled frames, two players were never "
+                   "in frame at the same time. Both players need to be "
+                   "visible, with the whole table in shot."))
     elif opposed_pct < 0.4:
         out.append(Rejection(
             code=RejectionCode.PLAYERS_NOT_OPPOSED,
             message="PongAI needs one player at each end of the table.",
-            detail=f"Players were on opposite ends in only {opposed_pct:.0%} of "
-                   "sampled frames. This usually means the camera is at an "
-                   "angle rather than side-on, or other people are in frame."))
+            detail=f"When both players were visible, they were on opposite "
+                   f"ends in only {opposed_pct:.0%} of frames. This usually "
+                   "means the camera is at an angle rather than side-on, or "
+                   "other people are in frame."))
 
-    return GeometryResult(table_pct, opposed_pct, checked, out)
+    return GeometryResult(table_pct, opposed_pct, checked, out, both_visible)
 
 
 # =============================================================================
@@ -394,7 +435,7 @@ def limits_payload() -> dict:
         "min_width": L.MIN_WIDTH,
         "min_height": L.MIN_HEIGHT,
         "min_aspect": L.MIN_ASPECT,
-        "velocity_min_fps": 60,
+        "velocity_min_fps": L.MIN_FPS_FOR_VELOCITY,
         "guidance": {
             "camera": "Film from the side, level with the table, with one "
                       "player at each end and the whole table in frame.",

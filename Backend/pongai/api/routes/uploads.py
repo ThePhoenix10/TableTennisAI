@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
+from pongai.api.deps import job_id as job_id_dep
 from pongai.api.deps import job_or_404, storage
+from pongai.api.errors import ApiError
 from pongai.core.schema import (
     CreateUploadRequest,
     CreateUploadResponse,
@@ -25,6 +27,7 @@ from pongai.core.validation import (
     Limits,
     Rejection,
     RejectionCode,
+    Severity,
     blocking,
     is_acceptable,
     validate_probe,
@@ -34,9 +37,12 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["uploads"])
 
 
-def _reject(status: int, rejections: list[Rejection]):
-    return HTTPException(status, detail={
-        "rejections": [r.model_dump(mode="json") for r in rejections]})
+def _reject(status: int, code: str, rejections: list[Rejection]):
+    """Validation failures answer with the Rejection records themselves, so
+    the message shown here is the same one core.validation gave the browser."""
+    return ApiError(status, code, rejections[0].message if rejections
+                    else "This video cannot be analysed.",
+                    rejections=rejections)
 
 
 @router.post("/uploads", response_model=CreateUploadResponse)
@@ -47,17 +53,22 @@ def create_upload(req: CreateUploadRequest,
     upload and hit request size limits."""
 
     if req.size_bytes > Limits.MAX_SIZE_BYTES:
-        raise _reject(413, [Rejection(
+        raise _reject(413, "file_too_large", [Rejection(
             code=RejectionCode.FILE_TOO_LARGE,
             message=f"This file is {req.size_bytes/1e6:.0f} MB. The limit is "
                     f"{Limits.MAX_SIZE_BYTES//1024//1024} MB.")])
 
     # If the client probed the file, reject obvious problems before a 100 MB
     # upload rather than after. Advisory only — the worker re-checks.
+    warnings: list[Rejection] = []
     if req.probe:
         rej = validate_probe(req.probe)
         if not is_acceptable(rej):
-            raise _reject(422, blocking(rej))
+            raise _reject(422, "rejected", blocking(rej))
+        # Warnings must survive. "At 30fps, swing-speed metrics will be
+        # withheld" has to reach the user BEFORE they wait 30 minutes for a
+        # result with four empty fields — they were being computed and dropped.
+        warnings = [r for r in rej if r.severity == Severity.WARN]
 
     job_id = store.new_job_id()
     url, blob_path, expires = store.upload_sas(
@@ -71,17 +82,20 @@ def create_upload(req: CreateUploadRequest,
         filename=req.filename,
         size_bytes=req.size_bytes,
         client_probe=req.probe,
+        warnings=warnings,
     ))
     log.info("job %s created: %s, %.1f MB", job_id, req.filename,
              req.size_bytes / 1e6)
 
     return CreateUploadResponse(
         job_id=job_id, upload_url=url, blob_path=blob_path,
-        expires_at=expires, max_size_bytes=Limits.MAX_SIZE_BYTES)
+        expires_at=expires, max_size_bytes=Limits.MAX_SIZE_BYTES,
+        warnings=warnings)
 
 
 @router.post("/jobs/{job_id}/submit", response_model=SubmitJobResponse)
-def submit(job_id: str, job: Job = Depends(job_or_404),
+def submit(job_id: str = Depends(job_id_dep),
+           job: Job = Depends(job_or_404),
            store: Storage = Depends(storage)) -> SubmitJobResponse:
     """Called by the client once the blob PUT completes."""
 
@@ -90,13 +104,15 @@ def submit(job_id: str, job: Job = Depends(job_or_404),
         return SubmitJobResponse(job_id=job_id, status=job.status,
                                  queue_position=store.queue_depth())
     if job.status != JobStatus.AWAITING_UPLOAD:
-        raise HTTPException(409, f"job is already {job.status.value}")
+        raise ApiError(409, "wrong_state",
+                       f"This job is already {job.status.value}.",
+                       status=job.status.value)
 
     blob_path = f"{job_id}/{job.filename}"
     actual = store.blob_size(UPLOADS_CONTAINER, blob_path)
     if actual is None:
-        raise HTTPException(400,
-                            "upload not found — did the PUT complete?")
+        raise ApiError(400, "upload_missing",
+                       "The upload was not found. Did the PUT complete?")
 
     # A truncated upload is a common failure and produces a confusing error
     # deep in the pipeline. Catch it here, where the message can be clear.
@@ -107,10 +123,11 @@ def submit(job_id: str, job: Job = Depends(job_or_404),
             message="The upload looks incomplete. Please try again.",
             detail=f"expected {job.size_bytes} bytes, blob has {actual}")]
         store.put_job(job)
-        raise _reject(400, job.rejections)
+        raise _reject(400, "upload_incomplete", job.rejections)
 
     depth = store.queue_depth()
     job.status = JobStatus.QUEUED
+    job.attempts = 1          # POST /jobs/{id}/retry increments from here
     store.put_job(job)
     store.enqueue(job_id)
     log.info("job %s queued behind %d", job_id, depth)

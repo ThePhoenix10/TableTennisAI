@@ -1,7 +1,7 @@
 """Validation rules. Pure — no Azure, no GPU."""
 import pytest
 from pongai.core.validation import (
-    Limits, RejectionCode, Severity, VideoProbe,
+    RejectionCode, Severity, VideoProbe,
     blocking, is_acceptable, validate_probe,
 )
 

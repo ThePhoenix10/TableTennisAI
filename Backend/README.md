@@ -109,7 +109,7 @@ where the estimate is noise.
 
 ## `pongai/api/` — the HTTP service
 
-FastAPI. Eleven routes across four modules.
+FastAPI. Twelve routes across four modules.
 
 | route | purpose |
 |---|---|
@@ -120,10 +120,28 @@ FastAPI. Eleven routes across four modules.
 | `GET /api/demos/{id}` | one demo, same shape as an analysis |
 | `POST /api/uploads` | → `job_id` + scoped SAS |
 | `POST /api/jobs/{id}/submit` | verify the blob landed, enqueue |
+| `POST /api/jobs/{id}/retry` | re-run a failed job on the same upload |
 | `GET /api/jobs/{id}/stream` | **SSE** progress |
 | `GET /api/jobs/{id}` | polling fallback |
 | `GET /api/jobs` | history |
 | `GET /api/analyses/{id}` | results + signed URLs |
+
+### Why retry is an endpoint, not queue redelivery
+
+A failed job keeps its id and its uploaded file, so `POST /jobs/{id}/retry`
+re-queues the analysis and nothing else — no second upload, and every URL the
+client already holds keeps working.
+
+Retries are explicit and capped at 3 attempts. A failure that will happen again
+should not quietly burn three GPU cold starts before anyone hears about it, and
+the user is the one who knows whether another ~30 minutes is worth it.
+
+`rejected` is excluded: validation is deterministic, so a retry would spend a
+full run reaching the identical rejection. The fix is a different recording.
+
+A job stuck in `processing` is retryable once it has been silent for 10
+minutes — `ProgressReporter` writes at least every 2 seconds, so that much
+silence means the replica is gone rather than busy.
 
 ### Why upload and submit are separate
 

@@ -26,6 +26,7 @@ import numpy as np
 import torch
 
 from pongai.core.schema import JobStage
+from pongai.worker.device import onnx_device, torch_device
 from pongai.worker.stages import analysis as A
 from pongai.worker.stages import video as V
 from pongai.worker.stages.geometry import (
@@ -59,7 +60,7 @@ class AnalysisResult:
 def load_detector():
     from ultralytics import YOLO
     m = YOLO(str(WEIGHTS / "best.pt"))
-    m.to("cuda")
+    m.to(torch_device())
     return m
 
 
@@ -68,19 +69,20 @@ def load_pose():
     from rtmlib import RTMPose
     return RTMPose(onnx_model=str(WEIGHTS / "rtmpose-l.onnx"),
                    model_input_size=(288, 384),
-                   backend="onnxruntime", device="cuda")
+                   backend="onnxruntime", device=onnx_device())
 
 
 @functools.lru_cache(maxsize=1)
 def load_nets():
     from pongai.worker.stages.nets import ClsNet, DetNet
-    d = torch.load(WEIGHTS / "detector_final.pt", map_location="cuda",
+    dev = torch_device()
+    d = torch.load(WEIGHTS / "detector_final.pt", map_location=dev,
                    weights_only=False)
-    c = torch.load(WEIGHTS / "classifier_final.pt", map_location="cuda",
+    c = torch.load(WEIGHTS / "classifier_final.pt", map_location=dev,
                    weights_only=False)
-    det = DetNet(d["c_in"]).cuda(); det.load_state_dict(d["state"]); det.eval()
-    cls = ClsNet(c["c_in"]).cuda(); cls.load_state_dict(c["state"]); cls.eval()
-    return det, cls, d["mu"], d["sd"], c["mu"].cuda(), c["sd"].cuda()
+    det = DetNet(d["c_in"]).to(dev); det.load_state_dict(d["state"]); det.eval()
+    cls = ClsNet(c["c_in"]).to(dev); cls.load_state_dict(c["state"]); cls.eval()
+    return det, cls, d["mu"], d["sd"], c["mu"].to(dev), c["sd"].to(dev)
 
 
 @functools.lru_cache(maxsize=1)
@@ -151,7 +153,7 @@ def analyse(video_path: Path, workdir: Path, source_fps: float,
 
     # --- 4-5. contact detection + side --------------------------------------
     stage(JobStage.DETECT)
-    prob, sidep = A.detect_contacts(det_net, st, dmu, dsd)
+    prob, sidep = A.detect_contacts(det_net, st, dmu, dsd, torch_device())
     peaks = A.decode_peaks(prob)
     if not len(peaks):
         raise RuntimeError("no shots detected — check the camera angle and "
@@ -163,7 +165,7 @@ def analyse(video_path: Path, workdir: Path, source_fps: float,
     # --- 6-8. classify, kinematics, rallies ---------------------------------
     stage(JobStage.CLASSIFY)
     pr, pt, kps, vals, sels = A.classify(
-        cls_net, st, peaks, sides, cmu, csd, temperature)
+        cls_net, st, peaks, sides, cmu, csd, temperature, torch_device())
     shots = A.build_shots(peaks, sides, pr, pt, kps, vals, sels, st,
                           source_fps, thresholds, prob)
     n_rallies = len({s["rally_id"] for s in shots})
@@ -185,16 +187,34 @@ def analyse(video_path: Path, workdir: Path, source_fps: float,
              "layout": ["left_cx", "left_cy", "right_cx", "right_cy"],
              "dtype": "int16", "players": {}}
     arr = np.zeros((written, 4), np.int16)
-    assert max(out_w, out_h) * 10 < 32767, "output too large for int16 track"
+    # A raise, not an assert: `python -O` strips asserts, and silently
+    # overflowing int16 corrupts the crop centres, which is what keeps the
+    # player panels aligned with the video.
+    if max(out_w, out_h) * 10 >= 32767:
+        raise RuntimeError(
+            f"output {out_w}x{out_h} too large for the int16 crop track")
+
+    # Build the track over at least as many frames as were actually written.
+    # CAP_PROP_FRAME_COUNT is not reliable, and when the decoder yielded more
+    # frames than it claimed, `cx[:written]` came up short and the assignment
+    # raised at the very last stage of a ~25-minute run.
+    track_frames = max(nfr, written, int(raw["frame_idx"].max()) + 1)
 
     for k, (pi, side) in enumerate(((0, "left"), (1, "right"))):
         cx, cy, cw, ch, det_pct = V.build_crop_track(
-            raw, pi, src_w, src_h, out_scale, n_frames=nfr)
+            raw, pi, src_w, src_h, out_scale, n_frames=track_frames)
         arr[:, k * 2] = (cx[:written] * 10).round().astype(np.int16)
         arr[:, k * 2 + 1] = (cy[:written] * 10).round().astype(np.int16)
         track["players"][side] = {"crop_w": round(cw, 1),
                                   "crop_h": round(ch, 1),
                                   "detected_pct": round(float(det_pct), 3)}
+
+    # The frontend reads this sidecar frame-for-frame against the video. If the
+    # two ever disagreed the panels would drift, so state the invariant here
+    # rather than discovering it as a slow desync in the player.
+    if len(arr) != written or track["n_frames"] != written:
+        raise RuntimeError(
+            f"crop track has {len(arr)} frames, video has {written}")
 
     track_bin = workdir / "track.bin"
     arr.tofile(track_bin)
@@ -222,6 +242,11 @@ def analyse(video_path: Path, workdir: Path, source_fps: float,
 
     # --- shots.json ---------------------------------------------------------
     shots_json = workdir / "shots.json"
+    # allow_nan=False on purpose. Python happily writes a bare `NaN` literal,
+    # which no JSON parser accepts — the API renders results with
+    # allow_nan=False and would answer 500 for the life of the job, after the
+    # job had already been marked DONE. Better to fail here, loudly, with the
+    # GPU work still attributable to a cause.
     shots_json.write_text(json.dumps({
         "meta": {
             "video_id": video_path.stem,
@@ -232,7 +257,7 @@ def analyse(video_path: Path, workdir: Path, source_fps: float,
             "schema_version": 1,
         },
         "shots": shots,
-    }))
+    }, allow_nan=False))
 
     log.info("pipeline finished in %.1f min", (time.time() - t0) / 60)
     return AnalysisResult(
