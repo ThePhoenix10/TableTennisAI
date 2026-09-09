@@ -61,10 +61,17 @@ def list_jobs(limit: int = Query(50, ge=1, le=200),
 # result, and the link only has to outlive one sitting with the player.
 SOURCE_SAS_HOURS = 2
 
-# Statuses where a worker may be actively reading the blob. Deleting underneath
-# it produces a confusing mid-pipeline failure, so these are refused — unless
-# the job has gone silent long enough that the replica is certainly gone.
-BUSY_STATUSES = (JobStatus.VALIDATING, JobStatus.PROCESSING)
+# Statuses where the job is committed to a worker. Deleting underneath one
+# produces a confusing mid-pipeline failure, and deleting a QUEUED job races a
+# replica that may be starting on it right now — the message would be picked up
+# moments later with nothing behind it.
+#
+# QUEUED is included so the UI can tell the truth: the confirmation shown before
+# submitting says deletion is unavailable once queued, and that has to hold.
+#
+# The staleness escape below still applies, so a job that never gets picked up
+# does not become permanently undeletable.
+BUSY_STATUSES = (JobStatus.QUEUED, JobStatus.VALIDATING, JobStatus.PROCESSING)
 
 
 def _source_path(job: Job) -> str:
@@ -110,8 +117,8 @@ def delete_job(job: Job = Depends(job_or_404),
     """
     if job.status in BUSY_STATUSES and job.seconds_since_update <= STALE_AFTER_S:
         raise ApiError(409, "job_busy",
-                       "This video is being analysed. Wait for it to finish "
-                       "before deleting it.",
+                       "This video is queued for analysis. Wait for it to "
+                       "finish before deleting it.",
                        status=job.status.value, progress=job.progress)
 
     # Blobs first. A row with no blobs is recoverable noise; blobs with no row

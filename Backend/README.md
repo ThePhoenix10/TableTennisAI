@@ -4,24 +4,93 @@ Table-tennis video analysis from body pose alone. Upload a match, get back
 every shot: when it happened, who played it, what kind of stroke it was, and
 13 measured kinematics.
 
-One repo, two services, one shared package.
+No ball tracking, no racket detection — the models read the players' bodies.
+
+---
+
+## What it does
+
+1. A browser uploads a match video straight to blob storage.
+2. The job is queued.
+3. A GPU/CPU worker picks it up and runs the pipeline:
+   find the rallies → track both players' skeletons → detect the moment of
+   contact → attribute each shot to a player → classify the stroke → measure it.
+4. The result is a rendered video with skeletons drawn on, plus a JSON record
+   of every shot.
+
+A 5-minute clip is roughly 25 minutes of work on a T4, so nothing about this
+is request/response — the whole design is built around a long job the user
+watches progress through.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+    Browser["Browser<br/>(Next.js static site)"]
+
+    subgraph Azure["Azure"]
+        API["<b>pongai-api</b><br/>Container App · always warm<br/>FastAPI"]
+        Worker["<b>pongai-worker</b><br/>Container Apps Job · scales to zero<br/>PyTorch + RTMPose + YOLO"]
+
+        subgraph Storage["Storage account"]
+            Blob[("Blob<br/>uploads · outputs · demos")]
+            Queue[["Queue<br/>analysis-jobs"]]
+            Table[("Table<br/>jobs")]
+        end
+    end
+
+    Browser -->|"1. POST /uploads<br/>→ job id + scoped SAS"| API
+    Browser -->|"2. PUT the file directly"| Blob
+    Browser -->|"3. POST /submit"| API
+    API -->|"4. enqueue job id"| Queue
+    Queue -.->|"5. queue depth ≥ 1<br/>starts a replica"| Worker
+    Worker -->|"6. download source"| Blob
+    Worker -->|"7. write progress<br/>every 2s"| Table
+    Worker -->|"8. upload results"| Blob
+    API -->|"9. poll for the stream"| Table
+    Browser -->|"10. SSE progress"| API
+    Browser -->|"11. play results<br/>via signed URLs"| Blob
+
+    classDef svc fill:#f55f02,stroke:#a63e02,color:#000
+    class API,Worker svc
+```
+
+### How to read that
+
+**The API and the worker never talk to each other.** The worker writes job
+state to Table Storage; the API polls that table to drive its progress stream.
+So the API can restart mid-job with no effect, and the worker never needs the
+API to be up.
+
+**Video never passes through the API.** Uploads go browser → blob directly
+using a SAS token scoped to one path, and results come back as signed URLs. A
+100 MB body through the API would occupy a worker for the whole upload and hit
+request size limits.
+
+**The API is always warm; the worker scales to zero.** The SSE endpoint holds
+connections open for 25–40 minutes, so a cold start mid-stream would drop them.
+The worker is where the cost is, so it only exists while a video is being
+analysed.
+
+**Upload and submit are separate steps.** A SAS can be issued and the upload
+then fail at 70%. Submit is where the API verifies the blob actually landed at
+its stated size, so a truncated upload is caught immediately rather than deep
+in the pipeline half an hour later.
+
+---
+
+## Code structure
 
 ```
 pongai/
 ├── core/       imported by BOTH services
 ├── api/        FastAPI — HTTP, always running
-└── worker/     GPU pipeline — runs to completion, exits
+└── worker/     the pipeline — runs to completion, exits
 ```
 
----
-
-## Why one repo
-
-`core` holds the shot schema and the validation rules. Split across two repos
-they would drift within a month, and the failure is quiet: a user gets one
-rejection message at upload and a different one an hour later.
-
-**The import rule:**
+The import rule, and the whole reason `core` exists:
 
 ```
 api    → core     yes
@@ -30,303 +99,196 @@ api    → worker   never
 worker → api      never
 ```
 
-The worker communicates only through Table Storage. The API polls that table
-to drive its progress stream. So the API can restart mid-job with no effect,
-and the worker never needs the API to be up.
+### `pongai/core/` — the shared contract
+
+Everything both services must agree on. Split across two packages they would
+drift within a month, and the failure is quiet: a user gets one rejection
+message at upload and a different one an hour later.
+
+| file | what it holds |
+|---|---|
+| `schema.py` | the data contract — `Shot`, `Analysis`, `Job`, the job state machine, and model facts like per-class precision |
+| `validation.py` | one rule set for browser, API and worker: size, duration, frame rate, resolution, aspect, and the camera-angle check |
+| `storage.py` | all Azure access — blob, queue, table, SAS signing |
+| `progress.py` | weighted stage progress and the reporter the worker writes through |
+
+### `pongai/api/` — the HTTP service
+
+| file | what it does |
+|---|---|
+| `main.py` | app setup, CORS, error handlers |
+| `deps.py` | shared dependencies, job-id validation |
+| `errors.py` | one error envelope for every failure |
+| `routes/uploads.py` | issue a SAS, verify the blob, enqueue |
+| `routes/jobs.py` | progress stream, polling, retry, source, delete |
+| `routes/analyses.py` | the finished result |
+| `routes/meta.py` | health, limits, demos |
+
+### `pongai/worker/` — the pipeline
+
+| file | what it does |
+|---|---|
+| `run.py` | pulls one job off the queue, runs it, exits |
+| `pipeline.py` | orchestrates the stages, writes the artifacts |
+| `device.py` | resolves CUDA vs CPU |
+| `stages/video.py` | decode, activity gate, pose extraction, render |
+| `stages/geometry.py` | skeleton layout, canonicalisation, frame-rate resampling |
+| `stages/analysis.py` | contact detection, classification, kinematics, rallies |
+| `stages/nets.py` | the two trained model architectures |
+| `weights/` | model files, baked into the image (not in git) |
+
+### Everything else
+
+| folder | what it does |
+|---|---|
+| `tests/` | pytest suite — no Azure, no GPU needed |
+| `docker/` | one image per service, plus a CPU worker variant |
+| `infra/` | `deploy.sh` — provisions and deploys everything |
+| `scripts/` | `check_storage.py` — verifies a storage account end to end |
 
 ---
 
-## `pongai/core/` — shared
-
-### `schema.py`
-Pydantic models forming the contract between API, worker and frontend.
-
-- `Shot` — one detected stroke: identity, prediction, 13 kinematics, quality
-- `Analysis` — a complete result plus signed URLs
-- `Job` — status, stage, progress, errors
-- `TrackHeader` — crop geometry for the player video panels
-
-Also holds `CLASS_PRECISION`, the held-out accuracy per stroke class, as data
-rather than prose. `control` (0.804) and `defence` (0.556) are too unreliable
-to draw conclusions from, so the frontend suppresses them from findings — one
-place to update when the model improves.
-
-Kinematics are split into `POSITION_KINEMATICS` (valid at any frame rate) and
-`VELOCITY_KINEMATICS` (require ≥60fps).
-
-### `validation.py`
-One rule set, three call sites: browser, API, worker.
-
-- `Limits` — size 100 MB, duration 5 min, fps 30–240, min resolution, min
-  aspect 1.2 (vertical video cannot work; a side-on view has to fit the whole
-  table)
-- `validate_probe()` — returns **all** problems at once, not just the first. A
-  user with a long vertical 24fps clip should see three issues in one
-  response rather than fix one and resubmit twice.
-- `probe_file()` — ffprobe. The authoritative read.
-- `validate_geometry()` — runs the table/player detector on ~10 sampled
-  frames. Rejects footage where no table is found, or where both players sit
-  on the same side of it. Catches phone video from a hall with six tables, or
-  a 45° camera angle. Seconds of CPU, saves ~30 minutes of GPU producing
-  confident nonsense.
-- `limits_payload()` — served to the browser so it validates against the same
-  numbers the worker enforces.
-
-Rejections carry a machine-readable `code` and a human `message`, and a
-severity: `reject` blocks, `warn` proceeds with reduced capability. A 30fps
-clip is a warning — detection and classification survive (96% class agreement,
-measured); only swing-speed metrics are withheld.
-
-### `storage.py`
-Azure Blob, Queue and Table access.
-
-- `upload_sas()` — a SAS scoped to one blob path, create+write only,
-  30-minute expiry. The browser PUTs directly; a 100 MB body never passes
-  through the API.
-- `read_sas()` — read-only URLs for results
-- job persistence in Table Storage, partitioned by month
-- queue enqueue and depth
-
-### `progress.py`
-Weighted stage progress.
-
-```
-validate        1%
-activity_gate   4%
-pose           60%   ← dominates
-detect          1%
-classify        1%
-render         30%   ← second
-upload          3%
-```
-
-Equal sevenths would jump to 43%, sit motionless for fifteen minutes during
-pose extraction, then jump again — which reads as a hung job. `ProgressReporter`
-writes to the job table (throttled) and suppresses ETA below 5% progress,
-where the estimate is noise.
-
----
-
-## `pongai/api/` — the HTTP service
-
-FastAPI. Twelve routes across four modules.
+## API
 
 | route | purpose |
 |---|---|
 | `GET /api/health` | liveness — deliberately does not touch storage |
 | `GET /api/ready` | readiness — does |
-| `GET /api/limits` | constraints, so browser and worker agree |
-| `GET /api/demos` | precomputed matches |
-| `GET /api/demos/{id}` | one demo, same shape as an analysis |
-| `POST /api/uploads` | → `job_id` + scoped SAS |
+| `GET /api/limits` | constraints + model capability, so the browser and the worker agree |
+| `POST /api/uploads` | → job id + scoped SAS |
 | `POST /api/jobs/{id}/submit` | verify the blob landed, enqueue |
-| `POST /api/jobs/{id}/retry` | re-run a failed job on the same upload |
 | `GET /api/jobs/{id}/stream` | **SSE** progress |
 | `GET /api/jobs/{id}` | polling fallback |
 | `GET /api/jobs` | history |
+| `GET /api/jobs/{id}/source` | short-lived link to the raw upload |
+| `POST /api/jobs/{id}/retry` | re-run a failed job on the same upload |
+| `DELETE /api/jobs/{id}` | remove the job and everything it stored |
 | `GET /api/analyses/{id}` | results + signed URLs |
+| `GET /api/demos`, `GET /api/demos/{id}` | precomputed matches |
 
-### Why retry is an endpoint, not queue redelivery
-
-A failed job keeps its id and its uploaded file, so `POST /jobs/{id}/retry`
-re-queues the analysis and nothing else — no second upload, and every URL the
-client already holds keeps working.
-
-Retries are explicit and capped at 3 attempts. A failure that will happen again
-should not quietly burn three GPU cold starts before anyone hears about it, and
-the user is the one who knows whether another ~30 minutes is worth it.
-
-`rejected` is excluded: validation is deterministic, so a retry would spend a
-full run reaching the identical rejection. The fix is a different recording.
-
-A job stuck in `processing` is retryable once it has been silent for 10
-minutes — `ProgressReporter` writes at least every 2 seconds, so that much
-silence means the replica is gone rather than busy.
-
-### Why upload and submit are separate
-
-A SAS can be issued and the upload then fail at 70%. If `POST /uploads`
-enqueued the job, the worker would pick up a truncated file and fail deep in
-the pipeline with a confusing error. Splitting them means the job only enters
-the queue once the blob is verified — right size, right place. `submit` is
-also idempotent, so a retried request cannot double-enqueue.
-
-### The SSE stream
-
-Polls the job table every 2s and pushes **only on change**. Sends `: ping`
-keepalives every 15s, without which an idle connection gets closed by the
-ingress. Sets `X-Accel-Buffering: no`, without which a proxy buffers events
-and nothing arrives until the end.
-
-The queued state gets its own wording, because the GPU scales to zero and the
-first job after an idle period waits several minutes for a node and an image
-pull. Saying only "queued" for six minutes reads as broken.
-
-Events: `status`, `done`, `error`. The client closes on the last two, and
-falls back to `GET /jobs/{id}` if the stream drops — a 40-minute connection
-will sometimes not survive a laptop sleep.
+Interactive docs at `/docs` once the API is running.
 
 ---
 
-## `pongai/worker/` — the GPU pipeline
+## Azure
 
-### `run.py`
-Queue consumer. Pulls one message, processes, exits — no HTTP server, no
-health probe, no idle replica.
+Everything lives in the `rgTableTennisAI` resource group.
 
-Re-probes the file with ffprobe and re-runs validation even for uploads the
-API accepted, then runs the geometry check, then the pipeline. The API only
-ever saw what the client claimed; a client can send anything, and rejecting
-here costs seconds rather than half an hour of GPU.
+| resource | type | role |
+|---|---|---|
+| `blobtabletennisai` | Storage account | blob + queue + table, all three |
+| `pongai-api` | Container App | the API, min 1 replica |
+| `pongai-worker` | Container Apps **Job** | queue-triggered, scales to zero |
+| `pongai-env` | Container Apps environment | hosts both |
+| `pongaiacr` | Container Registry | both images |
+| `stTableTennisAI` | Static Web App | the frontend |
 
-Takes a job id as an argument for local testing: `python -m pongai.worker.run <job_id>`.
+The storage account is the only piece all three tiers share:
 
-### `pipeline.py`
-Orchestrates nine stages: activity gate → pose → resample → canonicalise →
-contact detection → side attribution → classification → kinematics → rally
-grouping → render.
+- **Blob** — `uploads/` (raw video, deleted after 7 days), `outputs/` (rendered
+  video, shot records, crop track, thumbnail), `demos/`
+- **Queue** — `analysis-jobs`, one message per job, and what triggers the worker
+- **Table** — `jobs`, the job records the API polls for progress
 
-Model loaders are `lru_cache`d so a warm container reuses them. Weights are
-baked into the image (~115 MB) rather than downloaded — the job scales to
-zero, so a runtime fetch would cost on every cold start and add an external
-dependency.
+### Deploying
 
-### `stages/nets.py`
-The two trained architectures. Two choices here were deliberate:
-
-**`DetNet` keeps full temporal resolution.** A U-Net is the obvious shape for
-per-frame prediction, but every stride-2 layer blurs peak location and this
-model is scored at ±8 frames. Dilation reaches 2,033 frames of context
-without losing precision.
-
-**`ClsNet` uses attention pooling**, not the last hidden state. Contact sits
-at index 60 of the 97-frame window; reading the final timestep would force the
-decisive moment through 36 steps of decay.
-
-### `stages/geometry.py`
-COCO-17 layout, canonicalisation, frame-rate resampling.
-
-`canonicalise()` hip-centres, torso-scales, and optionally mirrors. Torso
-scale is a per-segment median, not per-frame — one bad frame would otherwise
-rescale that frame's whole skeleton and inject a spike exactly where the
-detector looks for one.
-
-`resample_to_grid()` maps native-fps pose onto the 120fps grid the models were
-trained on. **Positions are interpolated and velocity differenced afterwards.**
-Computing velocity at 30fps and rescaling gives a different, wrong answer,
-because consecutive-frame displacement spans 4× the time.
-
-> On mirroring: a flip changes side *and* handedness together, so the four
-> combinations form two closed orbits. `side XOR handedness` is invariant and
-> physically real — a right-hander at the left end shows their forehand toward
-> the camera, at the right end away. One binary residual is unavoidable. Side
-> is a 50/50 split and handedness only ~4%, so side is what gets normalised.
-
-### `stages/video.py`
-Decode, activity gate, pose extraction, render.
-
-`activity_gate()` keeps regions where both players are present and at least
-one is moving. Decodes **sequentially** — `grab()` advances without converting
-to BGR, `retrieve()` converts only sampled frames. A random seek per sampled
-frame forces the decoder back to a keyframe and is **9.2× slower**, measured.
-
-`extract_pose()` runs the detector on a stride and interpolates boxes between.
-Detecting every frame would roughly double the cost for no gain, since players
-move smoothly over a fraction of a second.
-
-`build_crop_track()` produces crop centres for the player panels. Three
-details decide whether the result is watchable:
-
-- **fixed zoom** — the box grows and shrinks as a player moves toward the
-  camera; following it makes them rescale constantly and posture impossible to
-  compare across shots
-- **smoothed centre** — raw boxes jitter several pixels, which magnified into
-  a zoomed crop is a violent shake (91% reduction, measured)
-- **gap filling** — where there is no detection the centre is interpolated so
-  the crop holds still rather than snapping
-
-`render()` draws skeletons on one video and pipes raw frames straight into
-ffmpeg. Writing mp4v and re-encoding encodes every frame **twice** — that was
-~17 of 24 minutes on a 12-minute clip. NVENC then encodes faster than the pipe
-can feed it, so encoding overlaps with decode rather than following it.
-
-Only one video is rendered. The player panels crop from it in the browser
-using the track, which is a third of the render time and a third of the size
-compared to baking a video per player.
-
-### `stages/analysis.py`
-Contact detection, classification, kinematics, rally grouping.
-
-- `decode_peaks()` — peak-picking with NMS at 30 frames (0.25s; you cannot
-  physically strike twice faster)
-- `classify()` — temperature-scaled. The final model reported 95.7% mean
-  confidence at ~79% accuracy; T was fitted on held-out predictions.
-- `kinematics()` — 13 scalars. **Velocity metrics return `None` below 60fps.**
-  At 30fps the wrist-speed peak is ~54% under-measured because that peak is
-  only ~33ms wide. Returning a wrong number would be worse than none — the
-  frontend would compare it against 120fps references and tell every
-  phone-video user their swing is slow.
-- `group_rallies()` — gaps over 1.5s. Validated against 282 annotated rally
-  endings: boundary F1 0.769, with recall capped at 0.789 by the detection
-  ceiling. The parameter is nearly irrelevant across a 5× range, which is a
-  good sign — the method is not balanced on a hand-tuned constant.
-
----
-
-## `tests/`
-
-Pure logic only — no Azure, no GPU.
-
-| file | covers |
-|---|---|
-| `test_validation.py` | accept/reject/warn cases, all-problems-at-once, fps boundary |
-| `test_progress.py` | weights sum to 1, monotonic, ETA suppression |
-| `test_analysis.py` | peak NMS, rally grouping, **velocity gating by fps** |
-| `test_geometry.py` | canonicalisation, mirroring, resampling |
-
-```
-pip install -e ".[dev]"
-pytest
+```bash
+./infra/deploy.sh
 ```
 
-### Not covered
+Idempotent and safe to re-run. It builds both images **in ACR** rather than
+locally — Container Apps runs x86_64, and a build on an Apple Silicon Mac
+produces arm64 images that fail with `exec format error`.
 
-**`worker/pipeline.py` has never been executed.** The stage logic is ported
-and the pure-numpy parts are tested, but the GPU path — model loading,
-RTMPose, NVENC, the full orchestration — is untested code.
-
-Run it once locally against a known clip and **compare the shot count to the
-notebook's output** before trusting it:
-
-```
-python -m pongai.worker.run <job_id>
-```
+The worker currently runs on **CPU** (`docker/worker.cpu.Dockerfile`), roughly
+14x realtime. Moving it to a T4 needs GPU quota via a support case, then adding
+the workload profile and passing `--workload-profile-name gpu-t4`.
 
 ---
 
 ## Running locally
 
-```
-pip install -e ".[api,dev]"
-export AZURE_STORAGE_CONNECTION_STRING="..."
-export ALLOWED_ORIGINS="http://localhost:3000"
-uvicorn pongai.api.main:app --reload
+### Requirements
+
+| | |
+|---|---|
+| **Python** | 3.11 or newer |
+| **ffmpeg** | required — the worker probes and encodes with it (`brew install ffmpeg`) |
+| **Azure** | a storage account connection string; the API creates the containers, queue and table itself on first start |
+| **Disk** | ~1.5 GB for the worker dependencies (torch, ultralytics, opencv) |
+| **GPU** | optional — set `PONGAI_DEVICE=cpu` to run without one |
+
+The API alone needs none of the heavy dependencies. Only the worker does.
+
+### Setup
+
+```bash
+cd Backend
+python3 -m venv .venv
+.venv/bin/pip install -e ".[api]"        # API only
+.venv/bin/pip install -e ".[api,worker]" # ...or with the pipeline
+
+cp .env.example .env                     # then paste your connection string
 ```
 
-Docs at `http://localhost:8000/docs`.
+Get the connection string from the Azure portal: **storage account → Security +
+networking → Access keys → Connection string**. Quote it in `.env` — it contains
+`;`, which the shell treats as a command separator.
 
-Before the worker runs, copy the weights into `pongai/worker/weights/`:
+### Check the storage account
 
+```bash
+set -a && source .env && set +a
+.venv/bin/python scripts/check_storage.py --fix
 ```
-best.pt                custom YOLO — table + player
-detector_final.pt      contact + side
-classifier_final.pt    4-class + technique
-rtmpose-l.onnx         pose
-calibration.json       temperature + per-class thresholds
+
+Creates anything missing and proves the credentials work with a real SAS
+round-trip. `--fix` is optional; without it the script only reports.
+
+### Run the API
+
+```bash
+set -a && source .env && set +a
+.venv/bin/uvicorn pongai.api.main:app --reload --port 8000
 ```
+
+`GET /api/ready` returning `{"status":"ready","queue_depth":0}` means it is up
+**and** talking to Azure.
+
+### Run the worker
+
+```bash
+set -a && source .env && set +a
+PONGAI_DEVICE=cpu .venv/bin/python -m pongai.worker.run
+```
+
+It takes one job off the queue, processes it, and exits — the same thing the
+container does. Pass a job id as an argument to run a specific one.
+
+Model weights must be present in `pongai/worker/weights/`. They are gitignored
+(~121 MB), so copy them in from a teammate or a release.
+
+### Tests
+
+```bash
+.venv/bin/python -m pytest
+```
+
+No Azure and no GPU. Worker tests skip automatically without the `worker`
+extra installed.
 
 ---
 
-## Deployment
+## Browser CORS
 
-**TBD.**
+The browser PUTs directly to blob storage, so the **storage account** needs its
+own CORS rule — the API's `ALLOWED_ORIGINS` does not cover it:
+
+```bash
+az storage cors add --services b --methods PUT OPTIONS GET HEAD \
+  --origins "http://localhost:3000" --allowed-headers '*' \
+  --exposed-headers '*' --max-age 3600 --account-name blobtabletennisai
+```
+
+Without it, uploads fail in the browser with an opaque CORS error that looks
+like a bug in the frontend.

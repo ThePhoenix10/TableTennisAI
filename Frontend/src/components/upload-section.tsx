@@ -84,37 +84,51 @@ export function UploadSection() {
 
   return (
     <>
-      <section aria-labelledby="upload-heading" className="mt-12 max-w-2xl">
-        <h2 id="upload-heading" className="text-lg font-semibold">
-          Upload
-        </h2>
-        <p className="text-ink-muted mt-1 text-sm">
-          Checked in the browser first, so a clip that cannot work is caught
-          before it is uploaded rather than after.
-        </p>
-        <div className="mt-4">
-          <UploadPanel onUploaded={() => setRefreshKey((k) => k + 1)} />
-        </div>
-      </section>
+      {/* Upload and the queue side by side: what you just did and what it did
+          next belong in one glance. They stack below lg, where two columns
+          would leave neither readable. The divider is a border on the right
+          column rather than a separate element, so it cannot fall out of step
+          with the gap. */}
+      <div className="mt-12 grid gap-8 lg:grid-cols-2 lg:gap-10">
+        <section aria-labelledby="upload-heading">
+          <h2 id="upload-heading" className="text-lg font-semibold">
+            Upload
+          </h2>
+          <p className="text-ink-muted mt-1 text-sm">
+            Checked in the browser first, so a clip that cannot work is caught
+            before it is uploaded rather than after.
+          </p>
+          <div className="mt-4">
+            <UploadPanel onUploaded={() => setRefreshKey((k) => k + 1)} />
+          </div>
+        </section>
 
+        <section
+          aria-labelledby="uploaded-heading"
+          className="border-border lg:border-l lg:pl-10"
+        >
+          <h2 id="uploaded-heading" className="text-lg font-semibold">
+            Videos uploaded
+          </h2>
+          <p className="text-ink-muted mt-1 text-sm">
+            Click a video to play it, or analyse it when you are ready.
+          </p>
+          <div className="mt-4">
+            <UploadedVideos
+              jobs={pending}
+              error={error}
+              loading={loading}
+              onReload={() => void reload()}
+              onDropped={(id) =>
+                setJobs((prev) => prev?.filter((j) => j.job_id !== id) ?? null)
+              }
+            />
+          </div>
+        </section>
+      </div>
+
+      {/* Full width: these are cards in a grid, and they are the payoff. */}
       {jobs && <AnalysedVideos jobs={jobs} />}
-
-      <section aria-labelledby="uploaded-heading" className="mt-12 max-w-2xl">
-        <h2 id="uploaded-heading" className="text-lg font-semibold">
-          Videos uploaded
-        </h2>
-        <div className="mt-4">
-          <UploadedVideos
-            jobs={pending}
-            error={error}
-            loading={loading}
-            onReload={() => void reload()}
-            onDropped={(id) =>
-              setJobs((prev) => prev?.filter((j) => j.job_id !== id) ?? null)
-            }
-          />
-        </div>
-      </section>
     </>
   );
 }

@@ -10,7 +10,7 @@ import {
   warnings,
 } from "@/lib/upload-validation";
 
-type Phase = "idle" | "probing" | "ready" | "uploading" | "done" | "error";
+type Phase = "idle" | "probing" | "ready" | "uploading" | "error";
 
 const fmtMb = (b: number) => `${(b / 1e6).toFixed(1)} MB`;
 const fmtDuration = (s: number) =>
@@ -153,7 +153,11 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
         abortRef.current.signal,
       );
 
-      setPhase("done");
+      // Straight back to an empty picker. The upload's own confirmation is
+      // the video appearing in the list beside this panel, so holding a
+      // "done" screen here just leaves stale details on the page and an
+      // extra click between the user and their next upload.
+      reset();
       onUploaded();
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === "AbortError") {
@@ -222,7 +226,7 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
             type="button"
             disabled={!limits || phase === "probing"}
             onClick={() => inputRef.current?.click()}
-            className="bg-brand text-on-brand hover:bg-brand-hover rounded px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+            className="bg-brand text-on-brand hover:bg-brand-hover cursor-pointer rounded px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
           >
             {phase === "probing" ? "Reading the video…" : "Choose a video"}
           </button>
@@ -294,12 +298,6 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
         </div>
       )}
 
-      {phase === "done" && (
-        <p aria-live="polite" className="mt-4 text-sm font-medium">
-          Uploaded. It is listed below.
-        </p>
-      )}
-
       {phase === "error" && error && (
         <p aria-live="polite" className="mt-4 text-sm">
           <span
@@ -319,7 +317,7 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
             <button
               type="button"
               onClick={() => void startUpload()}
-              className="bg-brand text-on-brand hover:bg-brand-hover rounded px-4 py-2 text-sm font-medium"
+              className="bg-brand text-on-brand hover:bg-brand-hover cursor-pointer rounded px-4 py-2 text-sm font-medium"
             >
               Upload
             </button>
@@ -328,7 +326,7 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
             <button
               type="button"
               onClick={() => abortRef.current?.abort()}
-              className="border-border rounded border px-4 py-2 text-sm font-medium"
+              className="border-border cursor-pointer rounded border px-4 py-2 text-sm font-medium"
             >
               Cancel
             </button>
@@ -336,9 +334,9 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
             <button
               type="button"
               onClick={reset}
-              className="border-border rounded border px-4 py-2 text-sm font-medium"
+              className="border-border cursor-pointer rounded border px-4 py-2 text-sm font-medium"
             >
-              {phase === "done" ? "Upload another" : "Choose a different file"}
+              Choose a different file
             </button>
           )}
         </div>
