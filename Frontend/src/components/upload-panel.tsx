@@ -222,7 +222,7 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
             type="button"
             disabled={!limits || phase === "probing"}
             onClick={() => inputRef.current?.click()}
-            className="bg-brand text-on-brand hover:bg-brand-hover rounded px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+            className="bg-brand text-on-brand hover:bg-brand-hover cursor-pointer rounded px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
           >
             {phase === "probing" ? "Reading the video…" : "Choose a video"}
           </button>
@@ -319,7 +319,7 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
             <button
               type="button"
               onClick={() => void startUpload()}
-              className="bg-brand text-on-brand hover:bg-brand-hover rounded px-4 py-2 text-sm font-medium"
+              className="bg-brand text-on-brand hover:bg-brand-hover cursor-pointer rounded px-4 py-2 text-sm font-medium"
             >
               Upload
             </button>
@@ -328,7 +328,7 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
             <button
               type="button"
               onClick={() => abortRef.current?.abort()}
-              className="border-border rounded border px-4 py-2 text-sm font-medium"
+              className="border-border cursor-pointer rounded border px-4 py-2 text-sm font-medium"
             >
               Cancel
             </button>
@@ -336,7 +336,7 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
             <button
               type="button"
               onClick={reset}
-              className="border-border rounded border px-4 py-2 text-sm font-medium"
+              className="border-border cursor-pointer rounded border px-4 py-2 text-sm font-medium"
             >
               {phase === "done" ? "Upload another" : "Choose a different file"}
             </button>

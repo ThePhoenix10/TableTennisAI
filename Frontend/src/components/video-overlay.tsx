@@ -88,7 +88,7 @@ export function VideoOverlay({
         <button
           type="button"
           onClick={() => ref.current?.close()}
-          className="border-border shrink-0 rounded border px-3 py-1 text-sm"
+          className="border-border shrink-0 cursor-pointer rounded border px-3 py-1 text-sm"
         >
           Close
         </button>
@@ -141,7 +141,7 @@ export function VideoOverlay({
           <button
             type="button"
             onClick={() => setConfirming(true)}
-            className="rounded border px-3 py-1.5 text-sm font-medium"
+            className="cursor-pointer rounded border px-3 py-1.5 text-sm font-medium"
             style={{
               color: "var(--color-attack)",
               borderColor: "var(--color-attack)",
@@ -171,7 +171,7 @@ export function VideoOverlay({
                 type="button"
                 disabled={deleting}
                 onClick={() => void confirmDelete()}
-                className="rounded px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+                className="cursor-pointer rounded px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
                 style={{ backgroundColor: "var(--color-attack)" }}
               >
                 {deleting ? "Deleting…" : "Yes, delete it"}
@@ -183,7 +183,7 @@ export function VideoOverlay({
                   setConfirming(false);
                   setDeleteError(null);
                 }}
-                className="border-border rounded border px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+                className="border-border cursor-pointer rounded border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Keep it
               </button>

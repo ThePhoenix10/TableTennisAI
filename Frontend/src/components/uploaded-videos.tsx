@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { ApiError, submitJob } from "@/lib/api";
+import { ApiError, deleteJob, submitJob } from "@/lib/api";
 import type { Job, JobStatus } from "@/lib/api-types";
+import { ConfirmDialog } from "./confirm-dialog";
 import { VideoOverlay } from "./video-overlay";
 
 /**
@@ -92,28 +93,44 @@ function JobRow({
   job,
   onOpen,
   onSubmitted,
+  onDeleted,
 }: {
   job: Job;
   onOpen: (j: Job) => void;
   onSubmitted: () => void;
+  onDeleted: (jobId: string) => void;
 }) {
   const meta = STATUS_META[job.status];
   const probe = job.probe ?? job.client_probe;
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<"analyse" | "delete" | null>(
+    null,
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  async function submit() {
-    setSubmitting(true);
-    setSubmitError(null);
+  // Only before submitting. Once queued the job belongs to a worker, and the
+  // API refuses both actions.
+  const actionable = job.status === "awaiting_upload";
+
+  async function run(what: "analyse" | "delete") {
+    setBusy(true);
+    setError(null);
     try {
-      await submitJob(job.job_id);
-      onSubmitted();
+      if (what === "analyse") {
+        await submitJob(job.job_id);
+        onSubmitted();
+      } else {
+        await deleteJob(job.job_id);
+        onDeleted(job.job_id);
+      }
+      setConfirming(null);
     } catch (e: unknown) {
       // A truncated upload surfaces here, with the API's own wording.
-      setSubmitError(
-        e instanceof ApiError ? e.message : "Could not submit for analysis.",
+      setError(
+        e instanceof ApiError ? e.message : `Could not ${what} this video.`,
       );
-      setSubmitting(false);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -125,7 +142,8 @@ function JobRow({
       <button
         type="button"
         onClick={() => onOpen(job)}
-        className="w-full p-4 text-left"
+        className="w-full cursor-pointer p-4 text-left"
+        aria-label={`Play ${job.filename ?? job.job_id}`}
       >
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <span className="font-medium break-all">
@@ -160,27 +178,25 @@ function JobRow({
           {fmtWhen(job.created_at)}
         </div>
 
-        {/* Only while a worker is on it. A queued job has no stage yet, and a
-          finished one has left this list entirely. */}
-        {(job.status === "processing" || job.status === "validating") && (
-          <ProgressBar job={job} />
-        )}
-
-        {/* The worker scales to zero, so the first job after an idle period
-          waits for a node and an ~875 MB image pull before any stage starts.
-          Several minutes of bare "Queued" reads as a failure. */}
-        {job.status === "queued" && (
-          <p className="text-ink-muted mt-3 text-xs">
-            Waiting for a worker. The first analysis after an idle period takes
-            a few minutes to start.
-          </p>
-        )}
-
         {probe && probe.fps > 0 && !probe.velocity_reliable && (
           // Served by the API as a computed field, so the 60fps rule is not
           // re-derived here.
           <p className="text-ink-muted mt-2 text-xs">
             Swing-speed metrics will be withheld at this frame rate.
+          </p>
+        )}
+
+        {(job.status === "processing" || job.status === "validating") && (
+          <ProgressBar job={job} />
+        )}
+
+        {/* The worker scales to zero, so the first job after an idle period
+            waits for a node and an ~875 MB image pull before any stage starts.
+            Several minutes of bare "Queued" reads as a failure. */}
+        {job.status === "queued" && (
+          <p className="text-ink-muted mt-3 text-xs">
+            Waiting for a worker. The first analysis after an idle period takes
+            a few minutes to start.
           </p>
         )}
 
@@ -196,26 +212,75 @@ function JobRow({
         )}
       </button>
 
-      {job.status === "awaiting_upload" && (
-        <div className="border-border flex flex-wrap items-center gap-3 border-t px-4 py-3">
+      {/* Actions sit outside the card button — a button inside a button is
+          invalid HTML and breaks keyboard navigation. Shown rather than
+          revealed on hover, so it is obvious the video can be acted on
+          without discovering it by accident. */}
+      {actionable && (
+        <div className="border-border flex flex-wrap items-center gap-2 border-t px-4 py-3">
           <button
             type="button"
-            disabled={submitting}
-            onClick={() => void submit()}
-            className="bg-brand text-on-brand hover:bg-brand-hover rounded px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+            onClick={() => setConfirming("analyse")}
+            className="bg-brand text-on-brand hover:bg-brand-hover cursor-pointer rounded px-3 py-1.5 text-sm font-medium"
           >
-            {submitting ? "Submitting…" : "Analyse this video"}
+            Analyse
           </button>
-          <span className="text-ink-muted text-xs">
-            Takes about 5x the clip length once a worker picks it up.
+          <button
+            type="button"
+            onClick={() => setConfirming("delete")}
+            className="cursor-pointer rounded border px-3 py-1.5 text-sm font-medium"
+            style={{
+              color: "var(--color-attack)",
+              borderColor: "var(--color-attack)",
+            }}
+          >
+            Delete
+          </button>
+          <span className="text-ink-subtle ml-auto text-xs">
+            Click the card to play it
           </span>
-          {submitError && (
-            <span className="text-xs" style={{ color: "var(--color-attack)" }}>
-              {submitError}
-            </span>
-          )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirming === "analyse"}
+        title="Send this video for analysis?"
+        body={
+          <>
+            <p>
+              Analysis takes about five times the length of the clip once a
+              worker picks it up.
+            </p>
+            <p className="mt-2">
+              <strong>You will not be able to delete it</strong> while it is
+              queued or being analysed.
+            </p>
+          </>
+        }
+        confirmLabel="Analyse"
+        busy={busy}
+        error={error}
+        onConfirm={() => void run("analyse")}
+        onCancel={() => {
+          setConfirming(null);
+          setError(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirming === "delete"}
+        title="Delete this video?"
+        body="The uploaded file is removed permanently. This cannot be undone."
+        confirmLabel="Delete video"
+        destructive
+        busy={busy}
+        error={error}
+        onConfirm={() => void run("delete")}
+        onCancel={() => {
+          setConfirming(null);
+          setError(null);
+        }}
+      />
     </li>
   );
 }
@@ -251,7 +316,7 @@ export function UploadedVideos({
           type="button"
           onClick={onReload}
           disabled={loading}
-          className="border-border rounded border px-3 py-1 text-sm disabled:opacity-50"
+          className="border-border cursor-pointer rounded border px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading ? "Refreshing…" : "Refresh"}
         </button>
@@ -271,6 +336,7 @@ export function UploadedVideos({
               job={j}
               onOpen={setOpen}
               onSubmitted={onReload}
+              onDeleted={onDropped}
             />
           ))}
         </ul>
