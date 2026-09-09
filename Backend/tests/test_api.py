@@ -554,15 +554,25 @@ def test_delete_is_gone_from_the_list_afterwards(client, store):
     assert client.get("/api/jobs").json() == []
 
 
-def test_delete_refuses_while_a_worker_is_running(client, store):
-    """Deleting the blob mid-pipeline produces a confusing failure 20 minutes
-    later rather than an error here."""
+@pytest.mark.parametrize("status", [
+    JobStatus.QUEUED, JobStatus.VALIDATING, JobStatus.PROCESSING,
+])
+def test_delete_refuses_once_committed_to_a_worker(client, store, status):
+    """Deleting mid-pipeline produces a confusing failure 20 minutes later.
+    QUEUED counts too: the UI warns before submitting that deletion is
+    unavailable once queued, and that promise has to hold."""
     jid = "0123456789abcdef"
-    _put(store, jid, status=JobStatus.PROCESSING, filename="c.mp4", progress=0.4)
+    _put(store, jid, status=status, filename="c.mp4", progress=0.4)
     r = client.delete(f"/api/jobs/{jid}")
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "job_busy"
     assert store.get_job(jid) is not None
+
+
+def test_delete_still_works_before_submitting(client, store):
+    jid = "0123456789abcdef"
+    _put(store, jid, status=JobStatus.AWAITING_UPLOAD, filename="c.mp4")
+    assert client.delete(f"/api/jobs/{jid}").status_code == 204
 
 
 def test_delete_allows_a_stalled_job(client, store):
