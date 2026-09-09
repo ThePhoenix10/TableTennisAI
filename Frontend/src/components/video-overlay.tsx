@@ -11,6 +11,16 @@ import type { Job, SourceVideo } from "@/lib/api-types";
  * Escape-to-close, inert background content and the top layer for free. Hand
  * -rolling that with a div is where accessible modals usually go wrong.
  */
+/**
+ * Statuses where the job belongs to a worker.
+ *
+ * The confirmation shown before submitting promises the video cannot be
+ * deleted once queued, so the UI must not offer a Delete button that would
+ * break that promise — regardless of whether the deployed API is old enough
+ * to still allow it.
+ */
+const NOT_DELETABLE = ["queued", "validating", "processing"];
+
 export function VideoOverlay({
   job,
   onClose,
@@ -136,61 +146,63 @@ export function VideoOverlay({
       </div>
 
       {/* --- delete ------------------------------------------------------- */}
-      <div className="border-border bg-bg/40 border-t p-4">
-        {!confirming ? (
-          <button
-            type="button"
-            onClick={() => setConfirming(true)}
-            className="cursor-pointer rounded border px-3 py-1.5 text-sm font-medium"
-            style={{
-              color: "var(--color-attack)",
-              borderColor: "var(--color-attack)",
-            }}
-          >
-            Delete video
-          </button>
-        ) : (
-          <div role="alertdialog" aria-labelledby="confirm-text">
-            <p id="confirm-text" className="text-sm font-medium">
-              Delete this video permanently?
-            </p>
-            <p className="text-ink-muted mt-1 text-sm">
-              The uploaded file and any analysis of it are removed. This cannot
-              be undone.
-            </p>
-            {deleteError && (
-              <p
-                className="mt-2 text-sm"
-                style={{ color: "var(--color-attack)" }}
-              >
-                {deleteError}
+      {!NOT_DELETABLE.includes(job.status) && (
+        <div className="border-border bg-bg/40 border-t p-4">
+          {!confirming ? (
+            <button
+              type="button"
+              onClick={() => setConfirming(true)}
+              className="cursor-pointer rounded border px-3 py-1.5 text-sm font-medium"
+              style={{
+                color: "var(--color-attack)",
+                borderColor: "var(--color-attack)",
+              }}
+            >
+              Delete video
+            </button>
+          ) : (
+            <div role="alertdialog" aria-labelledby="confirm-text">
+              <p id="confirm-text" className="text-sm font-medium">
+                Delete this video permanently?
               </p>
-            )}
-            <div className="mt-3 flex gap-2">
-              <button
-                type="button"
-                disabled={deleting}
-                onClick={() => void confirmDelete()}
-                className="cursor-pointer rounded px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-                style={{ backgroundColor: "var(--color-attack)" }}
-              >
-                {deleting ? "Deleting…" : "Yes, delete it"}
-              </button>
-              <button
-                type="button"
-                disabled={deleting}
-                onClick={() => {
-                  setConfirming(false);
-                  setDeleteError(null);
-                }}
-                className="border-border cursor-pointer rounded border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Keep it
-              </button>
+              <p className="text-ink-muted mt-1 text-sm">
+                The uploaded file and any analysis of it are removed. This
+                cannot be undone.
+              </p>
+              {deleteError && (
+                <p
+                  className="mt-2 text-sm"
+                  style={{ color: "var(--color-attack)" }}
+                >
+                  {deleteError}
+                </p>
+              )}
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => void confirmDelete()}
+                  className="cursor-pointer rounded px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  style={{ backgroundColor: "var(--color-attack)" }}
+                >
+                  {deleting ? "Deleting…" : "Yes, delete it"}
+                </button>
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => {
+                    setConfirming(false);
+                    setDeleteError(null);
+                  }}
+                  className="border-border cursor-pointer rounded border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Keep it
+                </button>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </dialog>
   );
 }
