@@ -10,7 +10,7 @@ import {
   warnings,
 } from "@/lib/upload-validation";
 
-type Phase = "idle" | "probing" | "ready" | "uploading" | "done" | "error";
+type Phase = "idle" | "probing" | "ready" | "uploading" | "error";
 
 const fmtMb = (b: number) => `${(b / 1e6).toFixed(1)} MB`;
 const fmtDuration = (s: number) =>
@@ -153,7 +153,11 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
         abortRef.current.signal,
       );
 
-      setPhase("done");
+      // Straight back to an empty picker. The upload's own confirmation is
+      // the video appearing in the list beside this panel, so holding a
+      // "done" screen here just leaves stale details on the page and an
+      // extra click between the user and their next upload.
+      reset();
       onUploaded();
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === "AbortError") {
@@ -294,12 +298,6 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
         </div>
       )}
 
-      {phase === "done" && (
-        <p aria-live="polite" className="mt-4 text-sm font-medium">
-          Uploaded. It is listed below.
-        </p>
-      )}
-
       {phase === "error" && error && (
         <p aria-live="polite" className="mt-4 text-sm">
           <span
@@ -338,7 +336,7 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
               onClick={reset}
               className="border-border cursor-pointer rounded border px-4 py-2 text-sm font-medium"
             >
-              {phase === "done" ? "Upload another" : "Choose a different file"}
+              Choose a different file
             </button>
           )}
         </div>
