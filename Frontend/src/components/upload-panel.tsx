@@ -60,7 +60,12 @@ function RejectionList({
   );
 }
 
-export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
+export function UploadPanel({
+  onUploaded,
+}: {
+  /** The job that was just created, so the caller can open it. */
+  onUploaded: (jobId: string) => void;
+}) {
   const [limits, setLimits] = useState<Limits | null>(null);
   const [limitsError, setLimitsError] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -158,7 +163,7 @@ export function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
       // "done" screen here just leaves stale details on the page and an
       // extra click between the user and their next upload.
       reset();
-      onUploaded();
+      onUploaded(created.job_id);
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === "AbortError") {
         reset();
