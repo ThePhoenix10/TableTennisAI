@@ -78,6 +78,24 @@ export interface Job {
   can_retry: boolean;
 }
 
+/** An account. Mirrors `User` in core/schema.py — the password hash is
+ *  excluded server-side, so it never appears here. */
+export interface User {
+  user_id: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  created_at: string;
+}
+
+export interface AuthSession {
+  access_token: string;
+  token_type: "bearer";
+  expires_in_s: number;
+  user: User;
+}
+
 /** GET /api/analyses/{job_id} — mirrors `Analysis` in core/schema.py. */
 export interface Analysis {
   meta: {

@@ -6,9 +6,11 @@
  * container. That is also why the blob upload is a direct PUT — a 100 MB body
  * never touches the API.
  */
+import { clearSession, getToken, setToken } from "./auth";
 import type {
   Analysis,
   ApiErrorBody,
+  AuthSession,
   CreateUploadResponse,
   Job,
   Limits,
@@ -41,25 +43,66 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  init?: RequestInit & { anonymous?: boolean },
+): Promise<T> {
+  const { anonymous, ...rest } = init ?? {};
+  const token = anonymous ? null : getToken();
+
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
-      ...init,
-      headers: { "Content-Type": "application/json", ...init?.headers },
+      ...rest,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...rest.headers,
+      },
     });
   } catch {
     // fetch only rejects on network failure, so this is genuinely "no API".
     throw new ApiError(0, null, `Cannot reach the API at ${API_BASE}.`);
   }
+
+  // Sliding expiry: the API hands back a fresh token once the current one is
+  // past halfway, so an active session never lapses mid-analysis.
+  const refreshed = res.headers.get("X-Refresh-Token");
+  if (refreshed) setToken(refreshed);
+
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as ApiErrorBody | null;
+    // A rejected session is cleared here rather than at each call site, so no
+    // screen is left holding a token the API has already refused.
+    if (res.status === 401 && !anonymous) clearSession();
     throw new ApiError(res.status, body, `Request failed (${res.status}).`);
   }
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }
 
-export const getLimits = () => request<Limits>("/api/limits");
+export const getLimits = () =>
+  request<Limits>("/api/limits", { anonymous: true });
+
+// --- accounts ----------------------------------------------------------------
+
+export const signUp = (body: {
+  email: string;
+  first_name: string;
+  last_name: string;
+  password: string;
+}) =>
+  request<AuthSession>("/api/auth/signup", {
+    method: "POST",
+    body: JSON.stringify(body),
+    anonymous: true,
+  });
+
+export const signIn = (body: { email: string; password: string }) =>
+  request<AuthSession>("/api/auth/signin", {
+    method: "POST",
+    body: JSON.stringify(body),
+    anonymous: true,
+  });
 
 /**
  * The finished analysis: meta, every shot, and signed URLs for the rendered
