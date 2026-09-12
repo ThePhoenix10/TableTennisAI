@@ -21,10 +21,15 @@ WORKDIR /app
 # different torch, which fails at the first detector call.
 RUN pip install --no-cache-dir \
       torch torchvision --index-url https://download.pytorch.org/whl/cu124
+# pydantic[email], not bare pydantic: core.schema declares User.email as an
+# EmailStr, and pydantic raises at class-definition time without
+# email-validator. The worker imports schema through storage, so a bare install
+# crashes the container on startup rather than at first use.
 RUN pip install --no-cache-dir \
       "onnxruntime-gpu==1.22.0" ultralytics \
       opencv-python-headless numpy pandas tqdm \
-      azure-storage-blob azure-storage-queue azure-data-tables pydantic
+      azure-storage-blob azure-storage-queue azure-data-tables \
+      "pydantic[email]" python-dotenv
 
 # rtmlib declares CPU onnxruntime as a hard dependency, which shadows the GPU
 # build and silently drops pose inference to CPU at ~40x the cost. --no-deps
