@@ -97,7 +97,7 @@ class FakeStore:
 
 @pytest.fixture
 def rep():
-    job = Job(job_id="0" * 16, status=JobStatus.QUEUED,
+    job = Job(job_id="0" * 16, user_id="u0000000000000000000000000000000", status=JobStatus.QUEUED,
               created_at=utcnow(), updated_at=utcnow())
     return ProgressReporter(storage=FakeStore(), job=job)
 
@@ -161,7 +161,7 @@ def test_generated_ids_pass_their_own_guard():
 def test_job_survives_the_table_storage_round_trip():
     """Everything persists as one JSON string, so a field that cannot
     serialize is only discovered on read."""
-    job = Job(job_id="0" * 16, status=JobStatus.PROCESSING,
+    job = Job(job_id="0" * 16, user_id="u0000000000000000000000000000000", status=JobStatus.PROCESSING,
               created_at=utcnow(), updated_at=utcnow(),
               stage=JobStage.POSE, progress=0.42,
               client_probe=probe(fps=30),
@@ -190,7 +190,7 @@ def test_validate_stage_persists_a_validating_status(rep):
 def test_a_retried_job_gets_past_the_workers_terminal_guard():
     """process() returns early on a terminal job. If reset_for_retry left the
     status terminal, the worker would silently skip every retry."""
-    job = Job(job_id="0" * 16, status=JobStatus.FAILED, attempts=1,
+    job = Job(job_id="0" * 16, user_id="u0000000000000000000000000000000", status=JobStatus.FAILED, attempts=1,
               created_at=utcnow(), updated_at=utcnow())
     assert job.is_terminal is True
     job.reset_for_retry()
@@ -203,7 +203,7 @@ def test_stage_label_is_served_with_the_job():
     keeping its own copy of the seven labels."""
     from pongai.core.schema import STAGE_LABELS
 
-    job = Job(job_id="0" * 16, status=JobStatus.PROCESSING,
+    job = Job(job_id="0" * 16, user_id="u0000000000000000000000000000000", status=JobStatus.PROCESSING,
               created_at=utcnow(), updated_at=utcnow(), stage=JobStage.POSE)
     assert job.model_dump()["stage_label"] == "Tracking body movement"
 
@@ -212,7 +212,7 @@ def test_stage_label_is_served_with_the_job():
 
 
 def test_stage_label_is_null_when_no_stage_is_running():
-    job = Job(job_id="0" * 16, status=JobStatus.QUEUED,
+    job = Job(job_id="0" * 16, user_id="u0000000000000000000000000000000", status=JobStatus.QUEUED,
               created_at=utcnow(), updated_at=utcnow())
     assert job.model_dump()["stage_label"] is None
 

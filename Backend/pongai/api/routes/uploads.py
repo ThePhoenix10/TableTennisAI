@@ -11,11 +11,13 @@ import logging
 
 from fastapi import APIRouter, Depends
 
+from pongai.api.deps import current_user
 from pongai.api.deps import job_id as job_id_dep
 from pongai.api.deps import job_or_404, storage
 from pongai.api.errors import ApiError
 from pongai.core.schema import (
     CreateUploadRequest,
+    User,
     CreateUploadResponse,
     Job,
     JobStatus,
@@ -47,6 +49,7 @@ def _reject(status: int, code: str, rejections: list[Rejection]):
 
 @router.post("/uploads", response_model=CreateUploadResponse)
 def create_upload(req: CreateUploadRequest,
+                  user: User = Depends(current_user),
                   store: Storage = Depends(storage)) -> CreateUploadResponse:
     """Returns a scoped SAS. The browser PUTs the file to blob directly —
     a 100 MB body through this service would occupy a worker for the whole
@@ -76,6 +79,7 @@ def create_upload(req: CreateUploadRequest,
 
     store.put_job(Job(
         job_id=job_id,
+        user_id=user.user_id,
         status=JobStatus.AWAITING_UPLOAD,
         created_at=utcnow(),
         updated_at=utcnow(),
@@ -129,7 +133,7 @@ def submit(job_id: str = Depends(job_id_dep),
     job.status = JobStatus.QUEUED
     job.attempts = 1          # POST /jobs/{id}/retry increments from here
     store.put_job(job)
-    store.enqueue(job_id)
+    store.enqueue(job.user_id, job_id)
     log.info("job %s queued behind %d", job_id, depth)
 
     # ~5x realtime, plus whatever is ahead, plus a cold start if the GPU has
