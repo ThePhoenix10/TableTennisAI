@@ -10,12 +10,13 @@ No ball tracking, no racket detection — the models read the players' bodies.
 
 ## What it does
 
-1. A browser uploads a match video straight to blob storage.
-2. The job is queued.
-3. A GPU/CPU worker picks it up and runs the pipeline:
+1. Someone signs in. Uploads and analyses are private to their account.
+2. Their browser uploads a match video straight to blob storage.
+3. They submit it, and the job is queued.
+4. A GPU/CPU worker picks it up and runs the pipeline:
    find the rallies → track both players' skeletons → detect the moment of
    contact → attribute each shot to a player → classify the stroke → measure it.
-4. The result is a rendered video with skeletons drawn on, plus a JSON record
+5. The result is a rendered video with skeletons drawn on, plus a JSON record
    of every shot.
 
 A 5-minute clip is roughly 25 minutes of work on a T4, so nothing about this
@@ -79,6 +80,16 @@ then fail at 70%. Submit is where the API verifies the blob actually landed at
 its stated size, so a truncated upload is caught immediately rather than deep
 in the pipeline half an hour later.
 
+**The jobs table is partitioned by owner.** That does two jobs at once: a
+user's list is one partition, and a single job is a point read on
+`(user_id, job_id)` rather than the table scan that querying by job id alone
+required. It is also why the queue message carries `{"u": …, "j": …}` and not
+just a job id — a worker holding only the id could no longer find the row.
+
+**Another account's job is reported missing, not forbidden.** A 403 would
+confirm the id exists, which turns every job route into a way to probe for
+other people's work.
+
 ---
 
 ## Code structure
@@ -107,18 +118,21 @@ message at upload and a different one an hour later.
 
 | file | what it holds |
 |---|---|
-| `schema.py` | the data contract — `Shot`, `Analysis`, `Job`, the job state machine, and model facts like per-class precision |
+| `schema.py` | the data contract — `Shot`, `Analysis`, `Job`, `User`, the job state machine, and model facts like per-class precision |
 | `validation.py` | one rule set for browser, API and worker: size, duration, frame rate, resolution, aspect, and the camera-angle check |
+| `auth.py` | argon2id password hashing, session tokens, and the password policy |
 | `storage.py` | all Azure access — blob, queue, table, SAS signing |
 | `progress.py` | weighted stage progress and the reporter the worker writes through |
+| `config.py` | loads a local `.env` so the app runs without a shell incantation |
 
 ### `pongai/api/` — the HTTP service
 
 | file | what it does |
 |---|---|
 | `main.py` | app setup, CORS, error handlers |
-| `deps.py` | shared dependencies, job-id validation |
+| `deps.py` | shared dependencies: job-id validation, `current_user`, ownership |
 | `errors.py` | one error envelope for every failure |
+| `routes/auth.py` | sign up, sign in, who am I |
 | `routes/uploads.py` | issue a SAS, verify the blob, enqueue |
 | `routes/jobs.py` | progress stream, polling, retry, source, delete |
 | `routes/analyses.py` | the finished result |
@@ -144,7 +158,7 @@ message at upload and a different one an hour later.
 | `tests/` | pytest suite — no Azure, no GPU needed |
 | `docker/` | one image per service, plus a CPU worker variant |
 | `infra/` | `deploy.sh` — provisions and deploys everything |
-| `scripts/` | `check_storage.py` — verifies a storage account end to end |
+| `scripts/` | `check_storage.py` verifies a storage account end to end; `reset_password.py` is the other half of the "email us and we will reset it" line on the sign-in page |
 
 ---
 
@@ -152,6 +166,9 @@ message at upload and a different one an hour later.
 
 | route | purpose |
 |---|---|
+| `POST /api/auth/signup` | create an account, and sign in |
+| `POST /api/auth/signin` | sign in |
+| `GET /api/auth/me` | the signed-in account |
 | `GET /api/health` | liveness — deliberately does not touch storage |
 | `GET /api/ready` | readiness — does |
 | `GET /api/limits` | constraints + model capability, so the browser and the worker agree |
@@ -159,12 +176,30 @@ message at upload and a different one an hour later.
 | `POST /api/jobs/{id}/submit` | verify the blob landed, enqueue |
 | `GET /api/jobs/{id}/stream` | **SSE** progress |
 | `GET /api/jobs/{id}` | polling fallback |
-| `GET /api/jobs` | history |
+| `GET /api/jobs` | the caller's own history |
 | `GET /api/jobs/{id}/source` | short-lived link to the raw upload |
 | `POST /api/jobs/{id}/retry` | re-run a failed job on the same upload |
 | `DELETE /api/jobs/{id}` | remove the job and everything it stored |
 | `GET /api/analyses/{id}` | results + signed URLs |
 | `GET /api/demos`, `GET /api/demos/{id}` | precomputed matches |
+
+Everything under `/api/jobs`, `/api/uploads` and `/api/analyses` needs a
+bearer token and only ever sees the caller's own work. Health, limits and the
+demos are public.
+
+### Accounts
+
+Passwords are hashed with **argon2id** and never stored or logged. The policy
+lives in `core/auth.py` so the browser and the API reject the same passwords
+with the same words: at least 8 characters, one uppercase, one special.
+
+Sessions are HS256 tokens valid for 60 minutes, with **sliding expiry** — past
+halfway the API returns a fresh one in `X-Refresh-Token` and the client swaps
+it in. An analysis runs for ~25 minutes with the page polling throughout, so a
+hard cut would sign people out mid-run.
+
+There is no password reset. The sign-in page says to contact an
+administrator, and `scripts/reset_password.py` is how one does it.
 
 Interactive docs at `/docs` once the API is running.
 
@@ -188,7 +223,8 @@ The storage account is the only piece all three tiers share:
 - **Blob** — `uploads/` (raw video, deleted after 7 days), `outputs/` (rendered
   video, shot records, crop track, thumbnail), `demos/`
 - **Queue** — `analysis-jobs`, one message per job, and what triggers the worker
-- **Table** — `jobs`, the job records the API polls for progress
+- **Table** — `jobs`, partitioned by owner, which the API polls for progress;
+  and `users`, one partition, so finding an account by email is a point read
 
 ### Deploying
 
@@ -214,7 +250,8 @@ the workload profile and passing `--workload-profile-name gpu-t4`.
 |---|---|
 | **Python** | 3.11 or newer |
 | **ffmpeg** | required — the worker probes and encodes with it (`brew install ffmpeg`) |
-| **Azure** | a storage account connection string; the API creates the containers, queue and table itself on first start |
+| **Azure** | a storage account connection string; the API creates the containers, queue and tables itself on first start |
+| **A signing key** | `PONGAI_JWT_SECRET`, at least 32 bytes. It has no default: a generated fallback would differ between API replicas, so a token minted by one would be rejected by another |
 | **Disk** | ~1.5 GB for the worker dependencies (torch, ultralytics, opencv) |
 | **GPU** | optional — set `PONGAI_DEVICE=cpu` to run without one |
 
@@ -228,17 +265,27 @@ python3 -m venv .venv
 .venv/bin/pip install -e ".[api]"        # API only
 .venv/bin/pip install -e ".[api,worker]" # ...or with the pipeline
 
-cp .env.example .env                     # then paste your connection string
+cp .env.example .env                     # then fill it in
 ```
 
-Get the connection string from the Azure portal: **storage account → Security +
-networking → Access keys → Connection string**. Quote it in `.env` — it contains
-`;`, which the shell treats as a command separator.
+`.env` needs two things:
+
+```bash
+# storage account → Security + networking → Access keys → Connection string.
+# QUOTE it: the ';' separators are shell command separators otherwise.
+AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=…"
+
+# openssl rand -base64 48
+PONGAI_JWT_SECRET="…"
+```
+
+The app loads `.env` itself, so none of the commands below need
+`source .env` first. Real environment variables always win, so a container is
+never overridden by a stray file.
 
 ### Check the storage account
 
 ```bash
-set -a && source .env && set +a
 .venv/bin/python scripts/check_storage.py --fix
 ```
 
@@ -248,7 +295,6 @@ round-trip. `--fix` is optional; without it the script only reports.
 ### Run the API
 
 ```bash
-set -a && source .env && set +a
 .venv/bin/uvicorn pongai.api.main:app --reload --port 8000
 ```
 
@@ -258,12 +304,16 @@ set -a && source .env && set +a
 ### Run the worker
 
 ```bash
-set -a && source .env && set +a
 PONGAI_DEVICE=cpu .venv/bin/python -m pongai.worker.run
 ```
 
 It takes one job off the queue, processes it, and exits — the same thing the
-container does. Pass a job id as an argument to run a specific one.
+container does. To run one specific job, name its owner as well, since the
+table is partitioned by user:
+
+```bash
+PONGAI_DEVICE=cpu .venv/bin/python -m pongai.worker.run <user_id> <job_id>
+```
 
 Model weights must be present in `pongai/worker/weights/`. They are gitignored
 (~121 MB), so copy them in from a teammate or a release.

@@ -13,13 +13,15 @@ Tailwind CSS v4
 
 ## What it does
 
-1. **Pick a video.** The file is measured in the browser first, so a clip that
+1. **Sign in.** Uploads and analyses are private to your account. The demo
+   matches need no account at all.
+2. **Pick a video.** The file is measured in the browser first, so a clip that
    cannot work is caught before 100 MB is uploaded rather than after.
-2. **Upload it** straight to Azure Blob Storage, using a short-lived link the
+3. **Upload it** straight to Azure Blob Storage, using a short-lived link the
    API issues. The video never passes through the API.
-3. **Analyse it.** The job goes to a queue; a worker picks it up. The page
+4. **Analyse it.** The job goes to a queue; a worker picks it up. The page
    shows weighted progress, the current stage and an estimate.
-4. **Read the result** — video with skeletons drawn on, a shot timeline,
+5. **Read the result** — video with skeletons drawn on, a shot timeline,
    per-player analytics and findings.
 
 Bundled demo matches are available without uploading anything.
@@ -31,7 +33,8 @@ Bundled demo matches are available without uploading anything.
 ```mermaid
 flowchart LR
     subgraph Browser["This app (static export)"]
-        Home["Home<br/>upload · queue · analysed"]
+        Home["/<br/>hero · what you get back"]
+        Dash["/dashboard<br/>upload · queue · analysed"]
         Screen["AnalysisScreen<br/>timeline · panels · findings"]
     end
 
@@ -41,15 +44,16 @@ flowchart LR
         Blob[("Azure Blob<br/>video · shots · crop track")]
     end
 
-    Home -->|"POST /uploads → signed link"| API
-    Home -->|"PUT the file directly"| Blob
-    Home -->|"poll /jobs for progress"| API
+    Home -->|"public, no account needed"| Demos
+    Dash -->|"a bearer token on every call"| API
+    Dash -->|"PUT the file directly"| Blob
+    Dash -->|"poll /jobs for progress"| API
     Screen -->|"GET /analyses/{id}"| API
     Screen -->|"signed URLs"| Blob
     Screen -->|"or bundled fixtures"| Demos
 
     classDef me fill:#f55f02,stroke:#a63e02,color:#000
-    class Home,Screen me
+    class Home,Dash,Screen me
 ```
 
 ### How to read that
@@ -69,15 +73,29 @@ for real matches is how the two would quietly stop agreeing.
 `/analysis/job/?id=…`, a static route that reads the id client-side. A static
 segment wins over the sibling dynamic route, so the two do not collide.
 
+**Marketing and workspace are separate pages.** `/` sells the product;
+`/dashboard` is where your videos live. They were one page for a while, and the
+tell was the header's "Upload video" button having to scroll to an anchor
+buried in a marketing page rather than simply navigating.
+
+**The session guard runs in the browser**, because a static export has no
+server to redirect before the page is served. That is not the security
+boundary: the API returns 401 without a token, and 404 for another account's
+job. The guard only avoids showing an empty shell.
+
 ---
 
 ## Routes
 
-| route                 | what it is                                               |
-| --------------------- | -------------------------------------------------------- |
-| `/`                   | upload, the queue, analysed videos, and the demo matches |
-| `/analysis/{id}`      | a bundled demo match, prerendered                        |
-| `/analysis/job/?id=…` | one of your uploads                                      |
+| route                                   | what it is                                    |
+| --------------------------------------- | --------------------------------------------- |
+| `/`                                     | the hero, and what an analysis looks like     |
+| `/dashboard`                            | upload, the queue, and your finished analyses |
+| `/analysis/{id}`                        | a bundled demo match, prerendered             |
+| `/analysis/job/?id=…`                   | one of your uploads                           |
+| `/signin`, `/signup`                    | accounts                                      |
+| `/profile`                              | your account                                  |
+| `/how-it-works`, `/contact`, `/privacy` | the footer pages                              |
 
 ---
 
@@ -102,15 +120,28 @@ src/
 
 ### `src/components/`
 
+**Accounts and chrome**
+
+| file                                 | what it does                                         |
+| ------------------------------------ | ---------------------------------------------------- |
+| `session-provider.tsx`               | `useSession`, reading the token store directly       |
+| `auth-form.tsx`                      | sign in and sign up, sharing one form                |
+| `account-menu.tsx`                   | the header avatar, profile and sign out              |
+| `require-session.tsx`                | the client-side guard on `/dashboard` and `/profile` |
+| `profile-view.tsx`                   | the account page                                     |
+| `hero.tsx`                           | the looping rally, the wordmark, the calls to action |
+| `dashboard-glimpse.tsx`              | a real capture of the analysis screen                |
+| `site-header.tsx`, `site-footer.tsx` | global chrome                                        |
+
 **Upload and the queue**
 
 | file                  | what it does                                        |
 | --------------------- | --------------------------------------------------- |
-| `upload-section.tsx`  | owns the job list both halves of the home page read |
+| `upload-section.tsx`  | owns the job list both lists on the dashboard read  |
 | `upload-panel.tsx`    | the picker — probe, validate, upload with progress  |
 | `uploaded-videos.tsx` | videos waiting, with progress and per-video actions |
 | `analysed-videos.tsx` | finished analyses, as cards                         |
-| `video-overlay.tsx`   | plays a raw upload back                             |
+| `video-overlay.tsx`   | plays a raw upload back, and acts on it             |
 | `confirm-dialog.tsx`  | shared confirmation, on the native `<dialog>`       |
 
 **The analysis screen**
@@ -168,7 +199,9 @@ behaves.
    browser, from pose windows.
 
 Only six type sizes exist (12/14/16/20/28/40). Tailwind's default scale is
-reset in `globals.css`, so an out-of-scale size fails loudly.
+reset in `globals.css`, so an out-of-scale size fails loudly. There is one
+documented exception, `--text-display`, for the hero wordmark: 40px is lost
+against full-bleed video, and it clamps down to exactly that on a phone.
 
 ---
 
@@ -218,6 +251,9 @@ construction.
 | `npm run test`          | unit tests for the pure logic in `lib/`           |
 | `npm run format`        | Prettier, with Tailwind class sorting             |
 | `npm run generate:demo` | rebuild the demo fixtures (runs before dev/build) |
+
+`scripts/capture-dashboard.mjs` retakes the screenshot on the landing page. It
+is not part of any build; see `public/hero/README.md` for when and how.
 
 > If `typecheck` reports a missing route type, run `npx next typegen` — Next
 > generates `PageProps` from the file system, and a new route needs one pass
