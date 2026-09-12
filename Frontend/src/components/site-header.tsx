@@ -1,10 +1,18 @@
+"use client";
+
 import Link from "next/link";
+import { AccountMenu } from "./account-menu";
+import { useSession } from "./session-provider";
+import { useUploadAction } from "@/lib/use-upload-action";
 
 /**
  * Global chrome. Deliberately thin — this is a data-dense product and the
- * density should come from the data, not the frame around it (spec §2).
+ * density should come from the data, not the frame around it.
  */
 export function SiteHeader() {
+  const { user, ready, signOut } = useSession();
+  const uploadVideo = useUploadAction();
+
   return (
     <header className="border-border bg-surface border-b">
       <a
@@ -24,6 +32,31 @@ export function SiteHeader() {
           />
           PongAI
         </Link>
+
+        <div className="ml-auto flex items-center gap-3">
+          <button
+            type="button"
+            onClick={uploadVideo}
+            className="bg-brand text-on-brand hover:bg-brand-hover cursor-pointer rounded px-3 py-1.5 text-sm font-medium"
+          >
+            Upload video
+          </button>
+
+          {/* Nothing account-related renders until the browser has read
+              storage; the page is prerendered signed-out, so doing otherwise
+              is a hydration mismatch. */}
+          {ready &&
+            (user ? (
+              <AccountMenu user={user} onSignOut={signOut} />
+            ) : (
+              <Link
+                href="/signin/"
+                className="border-border rounded border px-3 py-1.5 text-sm"
+              >
+                Sign in
+              </Link>
+            ))}
+        </div>
       </div>
     </header>
   );

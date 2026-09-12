@@ -13,6 +13,7 @@ mid-job with no effect.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -20,7 +21,11 @@ import tempfile
 import traceback
 from pathlib import Path
 
-from pongai.core.progress import ProgressReporter
+from pongai.core.config import load_env
+
+load_env()   # before anything reads os.environ
+
+from pongai.core.progress import ProgressReporter  # noqa: E402
 from pongai.core.schema import JobStage, utcnow
 from pongai.core.storage import OUTPUTS_CONTAINER, UPLOADS_CONTAINER, get_storage
 from pongai.core.validation import blocking, is_acceptable, validate_file
@@ -39,9 +44,9 @@ REPLICA_TIMEOUT_S = int(os.getenv("REPLICA_TIMEOUT", "3600"))
 VISIBILITY_S = int(os.getenv("VISIBILITY_TIMEOUT", str(REPLICA_TIMEOUT_S + 300)))
 
 
-def process(job_id: str) -> None:
+def process(user_id: str, job_id: str) -> None:
     store = get_storage()
-    job = store.get_job(job_id)
+    job = store.get_job(user_id, job_id)
     if not job:
         log.error("job %s not found", job_id)
         return
@@ -143,20 +148,34 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-    # A job id can be passed directly, which makes local testing trivial:
-    #   python -m pongai.worker.run <job_id>
-    if len(sys.argv) > 1:
-        process(sys.argv[1])
+    # A job can be named directly, which makes local testing trivial:
+    #   python -m pongai.worker.run <user_id> <job_id>
+    if len(sys.argv) > 2:
+        process(sys.argv[1], sys.argv[2])
         return 0
+    if len(sys.argv) > 1:
+        log.error("a job is now addressed by owner: "
+                  "python -m pongai.worker.run <user_id> <job_id>")
+        return 2
 
     store = get_storage()
     msgs = store.receive_messages(MAX_MESSAGES, VISIBILITY_S)
     handled = 0
     for m in msgs:
-        job_id = m.content
+        # The message carries the owner as well as the job: the table is
+        # partitioned by user, so a job id alone no longer locates the row.
+        try:
+            msg = json.loads(m.content)
+            user_id, job_id = msg["u"], msg["j"]
+        except (ValueError, KeyError, TypeError):
+            log.error("unreadable queue message, discarding: %r",
+                      m.content[:200])
+            store.delete_message(m)
+            continue
+
         log.info("picked up job %s (dequeue #%d)", job_id, m.dequeue_count)
         try:
-            process(job_id)
+            process(user_id, job_id)
         except Exception:
             # The job row is already FAILED and carries the reason; retrying is
             # explicit, via POST /api/jobs/{id}/retry, which enqueues a fresh

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ApiError, deleteJob, getSource } from "@/lib/api";
+import { ApiError, deleteJob, getSource, submitJob } from "@/lib/api";
+import { ConfirmDialog } from "./confirm-dialog";
 import type { Job, SourceVideo } from "@/lib/api-types";
 
 /**
@@ -25,18 +26,28 @@ export function VideoOverlay({
   job,
   onClose,
   onDeleted,
+  onSubmitted,
 }: {
   job: Job;
   onClose: () => void;
   onDeleted: (jobId: string) => void;
+  onSubmitted?: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [source, setSource] = useState<SourceVideo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [playbackError, setPlaybackError] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<"analyse" | "delete" | null>(
+    null,
+  );
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  // Before submitting, both actions are available. Afterwards the job belongs
+  // to a worker: the confirmation above promises it cannot be deleted while
+  // queued, and the UI has to keep that promise.
+  const actionable = job.status === "awaiting_upload";
+  const deletable = !NOT_DELETABLE.includes(job.status);
 
   // showModal() is imperative and has no declarative equivalent, so this is a
   // genuine "synchronise with an external system" effect.
@@ -64,18 +75,26 @@ export function VideoOverlay({
     };
   }, [job.job_id]);
 
-  async function confirmDelete() {
-    setDeleting(true);
-    setDeleteError(null);
+  async function run(what: "analyse" | "delete") {
+    setBusy(true);
+    setActionError(null);
     try {
-      await deleteJob(job.job_id);
-      onDeleted(job.job_id);
-      ref.current?.close();
+      if (what === "analyse") {
+        await submitJob(job.job_id);
+        onSubmitted?.();
+        ref.current?.close();
+      } else {
+        await deleteJob(job.job_id);
+        onDeleted(job.job_id);
+        ref.current?.close();
+      }
+      setConfirming(null);
     } catch (e: unknown) {
-      setDeleteError(
-        e instanceof ApiError ? e.message : "Could not delete this video.",
+      setActionError(
+        e instanceof ApiError ? e.message : `Could not ${what} this video.`,
       );
-      setDeleting(false);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -145,64 +164,86 @@ export function VideoOverlay({
         )}
       </div>
 
-      {/* --- delete ------------------------------------------------------- */}
-      {!NOT_DELETABLE.includes(job.status) && (
-        <div className="border-border bg-bg/40 border-t p-4">
-          {!confirming ? (
-            <button
-              type="button"
-              onClick={() => setConfirming(true)}
-              className="cursor-pointer rounded border px-3 py-1.5 text-sm font-medium"
-              style={{
-                color: "var(--color-attack)",
-                borderColor: "var(--color-attack)",
-              }}
-            >
-              Delete video
-            </button>
-          ) : (
-            <div role="alertdialog" aria-labelledby="confirm-text">
-              <p id="confirm-text" className="text-sm font-medium">
-                Delete this video permanently?
-              </p>
-              <p className="text-ink-muted mt-1 text-sm">
-                The uploaded file and any analysis of it are removed. This
-                cannot be undone.
-              </p>
-              {deleteError && (
-                <p
-                  className="mt-2 text-sm"
-                  style={{ color: "var(--color-attack)" }}
-                >
-                  {deleteError}
-                </p>
-              )}
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  disabled={deleting}
-                  onClick={() => void confirmDelete()}
-                  className="cursor-pointer rounded px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-                  style={{ backgroundColor: "var(--color-attack)" }}
-                >
-                  {deleting ? "Deleting…" : "Yes, delete it"}
-                </button>
-                <button
-                  type="button"
-                  disabled={deleting}
-                  onClick={() => {
-                    setConfirming(false);
-                    setDeleteError(null);
-                  }}
-                  className="border-border cursor-pointer rounded border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Keep it
-                </button>
-              </div>
-            </div>
-          )}
+      {/* --- actions ------------------------------------------------------ */}
+      {actionable && (
+        <div className="border-border bg-bg/40 flex flex-wrap gap-2 border-t p-4">
+          <button
+            type="button"
+            onClick={() => setConfirming("analyse")}
+            className="bg-brand text-on-brand hover:bg-brand-hover cursor-pointer rounded px-4 py-2 text-sm font-medium"
+          >
+            Analyse
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirming("delete")}
+            className="cursor-pointer rounded border px-4 py-2 text-sm font-medium"
+            style={{
+              color: "var(--color-attack)",
+              borderColor: "var(--color-attack)",
+            }}
+          >
+            Delete
+          </button>
         </div>
       )}
+
+      {/* Finished work stays deletable; nothing is reading it. */}
+      {!actionable && deletable && (
+        <div className="border-border bg-bg/40 border-t p-4">
+          <button
+            type="button"
+            onClick={() => setConfirming("delete")}
+            className="cursor-pointer rounded border px-3 py-1.5 text-sm font-medium"
+            style={{
+              color: "var(--color-attack)",
+              borderColor: "var(--color-attack)",
+            }}
+          >
+            Delete video
+          </button>
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirming === "analyse"}
+        title="Send this video for analysis?"
+        body={
+          <>
+            <p>
+              Analysis takes about five times the length of the clip once a
+              worker picks it up.
+            </p>
+            <p className="mt-2">
+              <strong>You will not be able to delete it</strong> while it is
+              queued or being analysed.
+            </p>
+          </>
+        }
+        confirmLabel="Analyse"
+        busy={busy}
+        error={actionError}
+        onConfirm={() => void run("analyse")}
+        onCancel={() => {
+          setConfirming(null);
+          setActionError(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirming === "delete"}
+        title="Delete this video?"
+        body="The uploaded file and any analysis of it are removed permanently. This cannot be undone."
+        confirmLabel="Delete video"
+        destructive
+        busy={busy}
+        error={actionError}
+        onConfirm={() => void run("delete")}
+        onCancel={() => {
+          setConfirming(null);
+          setActionError(null);
+        }}
+      />
     </dialog>
   );
 }

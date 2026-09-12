@@ -10,7 +10,14 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    computed_field,
+    field_validator,
+)
 
 SCHEMA_VERSION = 1
 
@@ -189,6 +196,49 @@ class DemoSummary(BaseModel):
 
 
 # =============================================================================
+# Accounts
+# =============================================================================
+
+class User(BaseModel):
+    """A person with an account.
+
+    `password_hash` is excluded from serialization, so a User can be returned
+    from a route without a second "public" model to keep in step — the risk
+    with that pattern is that the two drift and the hash leaks.
+    """
+    user_id: str
+    email: EmailStr
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    created_at: datetime
+    password_hash: str = Field(exclude=True, repr=False)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}".strip()
+
+
+class SignUpRequest(BaseModel):
+    email: EmailStr
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class SignInRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=200)
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in_s: int
+    user: User
+
+
+# =============================================================================
 # Jobs
 # =============================================================================
 
@@ -244,6 +294,9 @@ STAGE_LABELS: dict[JobStage, str] = {
 
 class Job(BaseModel):
     job_id: str
+    #: Owner. Also the table partition key, so listing a user's jobs and
+    #: fetching one are both point reads rather than table scans.
+    user_id: str
     status: JobStatus
     created_at: datetime
     updated_at: datetime

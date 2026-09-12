@@ -6,6 +6,8 @@ import type { Job } from "@/lib/api-types";
 import { AnalysedVideos } from "./analysed-videos";
 import { UploadPanel } from "./upload-panel";
 import { UploadedVideos } from "./uploaded-videos";
+import { VideoOverlay } from "./video-overlay";
+import { useSession } from "./session-provider";
 
 /**
  * Owns the job list for the whole home page.
@@ -20,8 +22,11 @@ import { UploadedVideos } from "./uploaded-videos";
  *  per-job SSE stream is the precise version; this list only needs the gist. */
 const POLL_MS = 4000;
 
-export function UploadSection() {
+export function UploadSection({ heading = false }: { heading?: boolean }) {
+  const { user } = useSession();
   const [jobs, setJobs] = useState<Job[] | null>(null);
+  /** The job the overlay is showing, set the moment an upload finishes. */
+  const [justUploaded, setJustUploaded] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -48,6 +53,7 @@ export function UploadSection() {
   // State is set only in the settlement callbacks, never in the effect body:
   // a synchronous setState here would cascade renders.
   useEffect(() => {
+    if (!user) return;
     let cancelled = false;
     let timer: number | undefined;
 
@@ -78,9 +84,14 @@ export function UploadSection() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [refreshKey]);
+  }, [refreshKey, user]);
 
-  const pending = jobs?.filter((j) => j.status !== "done") ?? null;
+  // Derived, not cleared in an effect: signing out must not leave the previous
+  // account's videos on screen, and the effect's `cancelled` flag already
+  // discards a response that arrives after the user changed.
+  const mine = user ? jobs : null;
+  const pending = mine?.filter((j) => j.status !== "done") ?? null;
+  const openJob = mine?.find((j) => j.job_id === justUploaded) ?? null;
 
   return (
     <>
@@ -89,7 +100,11 @@ export function UploadSection() {
           would leave neither readable. The divider is a border on the right
           column rather than a separate element, so it cannot fall out of step
           with the gap. */}
-      <div className="mt-12 grid gap-8 lg:grid-cols-2 lg:gap-10">
+      {heading && (
+        <h1 className="text-2xl font-semibold tracking-tight">Your videos</h1>
+      )}
+
+      <div className="mt-8 grid gap-8 lg:grid-cols-2 lg:gap-10">
         <section aria-labelledby="upload-heading">
           <h2 id="upload-heading" className="text-lg font-semibold">
             Upload
@@ -99,7 +114,12 @@ export function UploadSection() {
             before it is uploaded rather than after.
           </p>
           <div className="mt-4">
-            <UploadPanel onUploaded={() => setRefreshKey((k) => k + 1)} />
+            <UploadPanel
+              onUploaded={(jobId) => {
+                setJustUploaded(jobId);
+                setRefreshKey((k) => k + 1);
+              }}
+            />
           </div>
         </section>
 
@@ -128,7 +148,25 @@ export function UploadSection() {
       </div>
 
       {/* Full width: these are cards in a grid, and they are the payoff. */}
-      {jobs && <AnalysedVideos jobs={jobs} />}
+      {mine && <AnalysedVideos jobs={mine} />}
+
+      {/* The upload's confirmation: the same player the list opens, so the
+          video can be checked and acted on without hunting for it first. */}
+      {openJob && (
+        <VideoOverlay
+          key={openJob.job_id}
+          job={openJob}
+          onClose={() => setJustUploaded(null)}
+          onSubmitted={() => {
+            setJustUploaded(null);
+            void reload();
+          }}
+          onDeleted={(id) => {
+            setJobs((prev) => prev?.filter((j) => j.job_id !== id) ?? null);
+            setJustUploaded(null);
+          }}
+        />
+      )}
     </>
   );
 }

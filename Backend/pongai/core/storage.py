@@ -23,7 +23,7 @@ from azure.storage.blob import (
 )
 from azure.storage.queue import QueueClient, QueueServiceClient
 
-from pongai.core.schema import Job, utcnow
+from pongai.core.schema import Job, User, utcnow
 from pongai.core.validation import Limits
 
 UPLOADS_CONTAINER = "uploads"
@@ -31,6 +31,13 @@ OUTPUTS_CONTAINER = "outputs"
 DEMOS_CONTAINER = "demos"
 JOB_QUEUE = "analysis-jobs"
 JOB_TABLE = "jobs"
+USER_TABLE = "users"
+
+# Every account sits in one partition. Table Storage only indexes the key
+# pair, so a single partition is what makes "find the account for this email"
+# a point read instead of a scan. It caps throughput at one partition's worth,
+# which is far beyond anything this will see.
+USER_PARTITION = "user"
 
 # Job ids are `uuid4().hex[:16]`. Enforced here rather than only at the API
 # edge because the worker reaches get_job with the queue message body, which
@@ -41,6 +48,17 @@ JOB_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
 def is_job_id(value: str) -> bool:
     return bool(JOB_ID_RE.fullmatch(value or ""))
+
+
+def email_key(email: str) -> str:
+    """Row key for an account.
+
+    A hash of the lowercased address rather than the address itself: it makes
+    lookups case-insensitive, and sidesteps the characters Table Storage
+    forbids in a key. The readable address is kept as a property.
+    """
+    import hashlib
+    return hashlib.sha256(email.strip().lower().encode()).hexdigest()
 
 
 class Storage:
@@ -71,10 +89,11 @@ class Storage:
             self.queue_svc.create_queue(JOB_QUEUE)
         except ResourceExistsError:
             pass
-        try:
-            self.table_svc.create_table(JOB_TABLE)
-        except ResourceExistsError:
-            pass
+        for table in (JOB_TABLE, USER_TABLE):
+            try:
+                self.table_svc.create_table(table)
+            except ResourceExistsError:
+                pass
 
     # =========================================================================
     # SAS
@@ -174,8 +193,13 @@ class Storage:
     # =========================================================================
     # Queue
     # =========================================================================
-    def enqueue(self, job_id: str) -> None:
-        self._queue().send_message(job_id)
+    def enqueue(self, user_id: str, job_id: str) -> None:
+        """The message carries the owner as well as the job.
+
+        Since the partition key is the user, a worker holding only a job id
+        could no longer find the row without scanning the table.
+        """
+        self._queue().send_message(json.dumps({"u": user_id, "j": job_id}))
 
     def queue_depth(self) -> int:
         return self._queue().get_queue_properties().approximate_message_count or 0
@@ -199,12 +223,13 @@ class Storage:
     # =========================================================================
     # Jobs (Table Storage)
     # =========================================================================
-    # PartitionKey is a coarse date bucket so listing recent jobs is a single
-    # partition scan rather than a full table scan.
+    # PartitionKey is the owner. That does two jobs at once: a user's list is
+    # one partition, and a single job is a point read on (user, job) rather
+    # than the table scan that querying by RowKey alone used to require.
     def _entity(self, job: Job) -> dict:
         d = job.model_dump(mode="json")
         return {
-            "PartitionKey": job.created_at.strftime("%Y-%m"),
+            "PartitionKey": job.user_id,
             "RowKey": job.job_id,
             "payload": json.dumps(d),
             "status": job.status.value,
@@ -216,41 +241,77 @@ class Storage:
         self.table_svc.get_table_client(JOB_TABLE) \
             .upsert_entity(self._entity(job))
 
-    def get_job(self, job_id: str) -> Job | None:
+    def get_job(self, user_id: str, job_id: str) -> Job | None:
+        """One job, by owner. A point read — no query, no scan."""
         if not is_job_id(job_id):
             return None
-        client = self.table_svc.get_table_client(JOB_TABLE)
-        # RowKey is unique; partition is unknown without the creation month.
-        # `next` rather than `list`: results_per_page is a page SIZE, not a
-        # limit, so list() walked every matching row one HTTP request at a
-        # time. This is polled every 2s per open SSE stream.
-        row = next(iter(client.query_entities(
-            f"RowKey eq '{job_id}'", results_per_page=1)), None)
-        return Job.model_validate(json.loads(row["payload"])) if row else None
+        try:
+            row = self.table_svc.get_table_client(JOB_TABLE).get_entity(
+                user_id, job_id)
+        except ResourceNotFoundError:
+            return None
+        return Job.model_validate(json.loads(row["payload"]))
 
     def delete_job(self, job: Job) -> None:
         """Remove the job row. Its blobs are removed separately by the caller,
         blobs first — a row with no blobs is recoverable noise, whereas blobs
         with no row are invisible and bill forever."""
         self.table_svc.get_table_client(JOB_TABLE).delete_entity(
-            job.created_at.strftime("%Y-%m"), job.job_id)
+            job.user_id, job.job_id)
 
-    def list_jobs(self, limit: int = 50) -> list[Job]:
-        """Recent jobs, newest first.
-
-        Spans two month partitions. Querying only the current one meant that
-        at 00:00 on the 1st every job silently vanished from the history page.
-        """
+    def list_jobs(self, user_id: str, limit: int = 50) -> list[Job]:
+        """One user's jobs, newest first — a single partition."""
         client = self.table_svc.get_table_client(JOB_TABLE)
-        now = utcnow()
-        prev = (now.replace(day=1) - timedelta(days=1))
-        parts = {now.strftime("%Y-%m"), prev.strftime("%Y-%m")}
-        flt = " or ".join(f"PartitionKey eq '{p}'" for p in sorted(parts))
-
-        jobs = []
-        for row in client.query_entities(flt, results_per_page=min(limit, 100)):
-            jobs.append(Job.model_validate(json.loads(row["payload"])))
+        jobs = [
+            Job.model_validate(json.loads(row["payload"]))
+            for row in client.query_entities(
+                f"PartitionKey eq '{user_id}'",
+                results_per_page=min(limit, 100))
+        ]
         return sorted(jobs, key=lambda j: j.created_at, reverse=True)[:limit]
+
+    # =========================================================================
+    # Users
+    # =========================================================================
+    def create_user(self, user: User) -> bool:
+        """False when the address is already registered.
+
+        Uses create_entity rather than upsert so two simultaneous signups for
+        the same address cannot both succeed — the second gets a conflict from
+        the service rather than overwriting the first.
+        """
+        try:
+            self.table_svc.get_table_client(USER_TABLE).create_entity({
+                "PartitionKey": USER_PARTITION,
+                "RowKey": email_key(user.email),
+                "payload": json.dumps(user.model_dump(mode="json")),
+                "password_hash": user.password_hash,
+                "user_id": user.user_id,
+                "email": user.email,
+            })
+            return True
+        except ResourceExistsError:
+            return False
+
+    def get_user_by_email(self, email: str) -> User | None:
+        try:
+            row = self.table_svc.get_table_client(USER_TABLE).get_entity(
+                USER_PARTITION, email_key(email))
+        except ResourceNotFoundError:
+            return None
+        # The hash is stored beside the payload, not inside it: User excludes
+        # it from serialization so it cannot leak through a response.
+        return User(**json.loads(row["payload"]),
+                    password_hash=row["password_hash"])
+
+    def update_user_password(self, user: User, password_hash: str) -> None:
+        client = self.table_svc.get_table_client(USER_TABLE)
+        row = client.get_entity(USER_PARTITION, email_key(user.email))
+        row["password_hash"] = password_hash
+        client.update_entity(row)
+
+    def new_user_id(self) -> str:
+        return uuid.uuid4().hex
 
     def new_job_id(self) -> str:
         return uuid.uuid4().hex[:16]

@@ -22,6 +22,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from pongai.core.auth import AuthConfigError
 from pongai.core.validation import Rejection
 
 log = logging.getLogger(__name__)
@@ -73,6 +74,16 @@ def install(app: FastAPI) -> None:
         return JSONResponse(
             envelope("storage_unavailable",
                      "Storage is temporarily unreachable. Please retry."),
+            status_code=503)
+
+    @app.exception_handler(AuthConfigError)
+    async def _auth_config(req: Request, exc: AuthConfigError):
+        # The signing key is missing or too weak. Nothing the caller did.
+        log.error("auth misconfigured on %s: %s", req.url.path, exc)
+        return JSONResponse(
+            envelope("not_configured",
+                     "Sign-in is unavailable: the service is not configured "
+                     "correctly."),
             status_code=503)
 
     @app.exception_handler(KeyError)

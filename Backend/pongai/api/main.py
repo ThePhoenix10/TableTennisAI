@@ -15,9 +15,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from pongai.api import errors
-from pongai.api.routes import analyses, jobs, meta, uploads
-from pongai.core.storage import get_storage
+from pongai.core.config import load_env
+
+load_env()   # before anything reads os.environ
+
+from pongai.api import errors  # noqa: E402
+from pongai.api.routes import analyses, auth, jobs, meta, uploads
+from pongai.core import auth as core_auth  # noqa: E402
+from pongai.core.storage import get_storage  # noqa: E402
 
 log = logging.getLogger("pongai.api")
 
@@ -27,6 +32,13 @@ async def lifespan(app: FastAPI):
     logging.basicConfig(
         level=os.getenv("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # Fail loudly at the door rather than halfway through someone's signup.
+    try:
+        core_auth.secret()
+        log.info("session signing key ready")
+    except core_auth.AuthConfigError as e:
+        log.error("AUTH DISABLED: %s", e)
+
     try:
         get_storage().ensure_resources()
         log.info("storage ready")
@@ -71,5 +83,6 @@ def root() -> RedirectResponse:
     return RedirectResponse("/docs")
 
 
-for r in (meta.router, uploads.router, jobs.router, analyses.router):
+for r in (meta.router, auth.router, uploads.router, jobs.router,
+          analyses.router):
     app.include_router(r, prefix="/api")

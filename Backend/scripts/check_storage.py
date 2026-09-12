@@ -30,6 +30,9 @@ def fail(msg: str, fix: str = "") -> None:
 
 
 def main() -> int:
+    from pongai.core.config import load_env
+
+    load_env()   # so the script works without sourcing .env first
     do_fix = "--fix" in sys.argv
 
     cs = os.getenv("AZURE_STORAGE_CONNECTION_STRING")

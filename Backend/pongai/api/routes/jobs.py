@@ -14,6 +14,7 @@ import time
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
+from pongai.api.deps import current_user
 from pongai.api.deps import job_id as job_id_dep
 from pongai.api.deps import job_or_404, storage
 from pongai.api.errors import ApiError
@@ -21,6 +22,7 @@ from pongai.core.progress import STAGE_LABELS
 from pongai.core.schema import (
     MAX_ATTEMPTS,
     STALE_AFTER_S,
+    User,
     Job,
     JobStatus,
     SourceVideo,
@@ -38,6 +40,10 @@ MAX_STREAM_S = 3600.0
 # which varies by engine.
 CLIENT_RETRY_MS = 3000
 
+# Storage hiccups are worth riding out; a persistent fault is not. Five in a
+# row is ~10 seconds of failure, well past anything transient.
+MAX_CONSECUTIVE_FAILURES = 5
+
 
 @router.get("/jobs/{job_id}", response_model=Job, summary="Poll one job")
 def get_job(job: Job = Depends(job_or_404)) -> Job:
@@ -52,9 +58,10 @@ def get_job(job: Job = Depends(job_or_404)) -> Job:
 
 @router.get("/jobs", response_model=list[Job], summary="Recent jobs")
 def list_jobs(limit: int = Query(50, ge=1, le=200),
+              user: User = Depends(current_user),
               store: Storage = Depends(storage)) -> list[Job]:
-    """History. Analyses take ~30 minutes; nobody sits and watches."""
-    return store.list_jobs(limit)
+    """The caller's own history. Analyses take ~30 minutes; nobody watches."""
+    return store.list_jobs(user.user_id, limit)
 
 
 # Short-lived on purpose. This is the user's raw footage, not a published
@@ -186,7 +193,7 @@ def retry(job_id: str = Depends(job_id_dep),
     depth = store.queue_depth()
     job.reset_for_retry()
     store.put_job(job)
-    store.enqueue(job.job_id)
+    store.enqueue(job.user_id, job.job_id)
     log.info("job %s retry #%d queued behind %d", job.job_id, job.attempts, depth)
 
     est = None
@@ -238,6 +245,7 @@ def _message(job: Job) -> str:
 
 @router.get("/jobs/{job_id}/stream", summary="SSE progress")
 async def stream(request: Request, job_id: str = Depends(job_id_dep),
+                 user: User = Depends(current_user),
                  store: Storage = Depends(storage)) -> StreamingResponse:
     """Server-sent events until the job reaches a terminal state.
 
@@ -255,6 +263,7 @@ async def stream(request: Request, job_id: str = Depends(job_id_dep),
         # would fire late.
         started = time.monotonic()
         last_keepalive = started
+        consecutive_failures = 0
 
         yield f"retry: {CLIENT_RETRY_MS}\n\n"
 
@@ -266,14 +275,27 @@ async def stream(request: Request, job_id: str = Depends(job_id_dep),
             # blocking SDK call — off the event loop so one slow read does not
             # stall every other connection
             try:
-                job = await asyncio.to_thread(store.get_job, job_id)
+                job = await asyncio.to_thread(
+                    store.get_job, user.user_id, job_id)
             except Exception:
                 # A transient storage error must not kill a 40-minute stream;
-                # the next poll will very likely succeed.
-                log.warning("job %s stream: storage read failed", job_id,
-                            exc_info=True)
+                # the next poll will very likely succeed. A PERMANENT one must
+                # not be retried for the full hour, though — that holds a
+                # connection open and polls the table 1800 times to keep
+                # failing. Give up after a few in a row and let the client
+                # fall back to GET /jobs/{id}.
+                consecutive_failures += 1
+                log.warning("job %s stream: storage read failed (%d in a row)",
+                            job_id, consecutive_failures, exc_info=True)
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    yield _event("error", {
+                        "code": "stream_unavailable",
+                        "message": "Progress updates are unavailable. "
+                                   "Reload to check on this analysis."})
+                    return
                 await asyncio.sleep(POLL_INTERVAL_S)
                 continue
+            consecutive_failures = 0
 
             if job is None:
                 yield _event("error", {"code": "job_not_found",

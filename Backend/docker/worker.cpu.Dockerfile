@@ -35,9 +35,14 @@ WORKDIR /app
 RUN pip install --no-cache-dir \
       torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
+# pydantic[email], not bare pydantic: core.schema declares User.email as an
+# EmailStr, and pydantic raises at class-definition time without
+# email-validator. The worker imports schema through storage, so a bare install
+# crashes the container on startup rather than at first use.
 RUN pip install --no-cache-dir \
       onnxruntime ultralytics opencv-python-headless numpy pandas tqdm \
-      azure-storage-blob azure-storage-queue azure-data-tables pydantic
+      azure-storage-blob azure-storage-queue azure-data-tables \
+      "pydantic[email]" python-dotenv
 
 # rtmlib pins its own onnxruntime; --no-deps keeps the one installed above.
 # Its actual imports (numpy, opencv, onnxruntime, tqdm) are all present.

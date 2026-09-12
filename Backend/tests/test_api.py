@@ -7,6 +7,8 @@ import json
 
 import pytest
 
+USER_ID = "u0000000000000000000000000000000"
+
 from pongai.core.schema import Job, JobStatus, utcnow
 from pongai.core.storage import DEMOS_CONTAINER, OUTPUTS_CONTAINER, UPLOADS_CONTAINER
 from pongai.core.validation import Severity
@@ -70,7 +72,7 @@ def test_30fps_upload_returns_a_warning_not_a_rejection(client, probe, store):
     assert warnings[0]["severity"] == Severity.WARN.value
     assert "swing-speed" in warnings[0]["message"]
     # and it is persisted, so the poll endpoint and the stream can replay it
-    job = store.get_job(r.json()["job_id"])
+    job = store.get_job(USER_ID, r.json()["job_id"])
     assert len(job.warnings) == 1
 
 
@@ -110,8 +112,8 @@ def test_limits_serves_model_capability(client):
 @pytest.mark.parametrize("fps,expected", [(120.0, True), (30.0, False)])
 def test_analysis_serves_velocity_reliable(client, store, make_analysis, fps, expected):
     jid = "0123456789abcdef"
-    store.put_job(Job(job_id=jid, status=JobStatus.DONE, created_at=utcnow(),
-                      updated_at=utcnow()))
+    store.put_job(Job(job_id=jid, user_id="u0000000000000000000000000000000", status=JobStatus.DONE,
+                      created_at=utcnow(), updated_at=utcnow()))
     store.put_json(OUTPUTS_CONTAINER, f"{jid}/shots.json",
                    make_analysis(fps=fps))
     r = client.get(f"/api/analyses/{jid}")
@@ -123,15 +125,15 @@ def test_analysis_serves_velocity_reliable(client, store, make_analysis, fps, ex
 
 def test_job_serves_is_terminal(client, store):
     jid = "0123456789abcdef"
-    store.put_job(Job(job_id=jid, status=JobStatus.PROCESSING,
+    store.put_job(Job(job_id=jid, user_id="u0000000000000000000000000000000", status=JobStatus.PROCESSING,
                       created_at=utcnow(), updated_at=utcnow()))
     assert client.get(f"/api/jobs/{jid}").json()["is_terminal"] is False
 
 
 def test_analysis_409_while_running(client, store):
     jid = "0123456789abcdef"
-    store.put_job(Job(job_id=jid, status=JobStatus.PROCESSING, progress=0.4,
-                      created_at=utcnow(), updated_at=utcnow()))
+    store.put_job(Job(job_id=jid, user_id="u0000000000000000000000000000000", status=JobStatus.PROCESSING,
+                      progress=0.4, created_at=utcnow(), updated_at=utcnow()))
     r = client.get(f"/api/analyses/{jid}")
     assert r.status_code == 409
     assert r.json()["error"]["context"]["progress"] == 0.4
@@ -160,7 +162,7 @@ def test_submit_enqueues_once_and_is_idempotent(client, store, probe):
     store.blobs[(UPLOADS_CONTAINER, up["blob_path"])] = b"x" * 20_000_000
     assert client.post(f"/api/jobs/{up['job_id']}/submit").status_code == 200
     assert client.post(f"/api/jobs/{up['job_id']}/submit").status_code == 200
-    assert store.queued == [up["job_id"]]
+    assert store.queued == [(USER_ID, up["job_id"])]
 
 
 def test_truncated_upload_is_caught_at_submit(client, store, probe):
@@ -169,7 +171,7 @@ def test_truncated_upload_is_caught_at_submit(client, store, probe):
     r = client.post(f"/api/jobs/{up['job_id']}/submit")
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "upload_incomplete"
-    assert store.get_job(up["job_id"]).status == JobStatus.REJECTED
+    assert store.get_job(USER_ID, up["job_id"]).status == JobStatus.REJECTED
 
 
 def test_filename_with_path_separator_rejected(client):
@@ -250,6 +252,7 @@ def _sse(client, path, timeout=10.0):
 
 
 def _put(store, jid, **kw):
+    kw.setdefault("user_id", "u0000000000000000000000000000000")
     store.put_job(Job(job_id=jid, created_at=utcnow(), updated_at=utcnow(),
                       **kw))
 
@@ -270,7 +273,7 @@ def test_stream_replays_warnings_before_the_wait(client, store, probe):
     up = client.post("/api/uploads", json={
         "filename": "c.mp4", "size_bytes": probe["size_bytes"],
         "probe": {**probe, "fps": 30.0}}).json()
-    job = store.get_job(up["job_id"])
+    job = store.get_job(USER_ID, up["job_id"])
     job.status = JobStatus.DONE
     store.put_job(job)
 
@@ -311,16 +314,31 @@ def test_stream_survives_a_transient_storage_failure(client, store):
     _put(store, jid, status=JobStatus.DONE)
     real, calls = store.get_job, {"n": 0}
 
-    def flaky(job_id):
+    def flaky(user_id, job_id):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("transient")
-        return real(job_id)
+        return real(user_id, job_id)
 
     store.get_job = flaky
     events = _sse(client, f"/api/jobs/{jid}/stream")
     assert [e for e, _ in events] == ["status", "done"]
     assert calls["n"] == 2
+
+
+def test_stream_gives_up_on_a_persistent_storage_failure(client, store):
+    """The retry above is for hiccups. A fault that never clears must not hold
+    the connection open for the full hour, polling the table to keep failing."""
+    jid = "0123456789abcdef"
+    _put(store, jid, status=JobStatus.DONE)
+
+    def broken(user_id, job_id):
+        raise RuntimeError("storage is down")
+
+    store.get_job = broken
+    events = _sse(client, f"/api/jobs/{jid}/stream")
+    assert events[-1][0] == "error"
+    assert events[-1][1]["code"] == "stream_unavailable"
 
 
 def test_worker_warning_reaches_the_browser(client, store):
@@ -334,7 +352,7 @@ def test_worker_warning_reaches_the_browser(client, store):
     jid = "0123456789abcdef"
     _put(store, jid, status=JobStatus.QUEUED)
 
-    job = store.get_job(jid)
+    job = store.get_job(USER_ID, jid)
     rep = ProgressReporter(storage=store, job=job)
     rep.warn(validate_probe(VideoProbe(
         size_bytes=50_000_000, duration_s=180, width=1920, height=1080,
@@ -369,13 +387,13 @@ def test_retry_requeues_the_same_job_id(client, store):
     assert r.status_code == 200, r.text
     assert r.json()["job_id"] == jid          # the id is stable
     assert r.json()["status"] == "queued"
-    assert store.queued == [jid]              # re-enqueued, not re-uploaded
+    assert store.queued == [(USER_ID, jid)]              # re-enqueued, not re-uploaded
 
 
 def test_retry_clears_the_previous_attempt(client, store):
     jid = _failed(store)
     client.post(f"/api/jobs/{jid}/retry")
-    job = store.get_job(jid)
+    job = store.get_job(USER_ID, jid)
     assert job.status == JobStatus.QUEUED
     assert job.attempts == 2
     assert job.error_code is None and job.error_message is None
@@ -396,7 +414,7 @@ def test_stream_still_works_on_the_same_id_after_retry(client, store):
     of reusing the id."""
     jid = _failed(store)
     client.post(f"/api/jobs/{jid}/retry")
-    job = store.get_job(jid)
+    job = store.get_job(USER_ID, jid)
     job.status = JobStatus.DONE
     store.put_job(job)
     assert [e for e, _ in _sse(client, f"/api/jobs/{jid}/stream")][-1] == "done"
@@ -441,13 +459,13 @@ def test_a_stalled_job_can_be_retried(client, store):
     from datetime import timedelta
     jid = "0123456789abcdef"
     _put(store, jid, status=JobStatus.PROCESSING, attempts=1, filename="c.mp4")
-    stuck = store.get_job(jid)
+    stuck = store.get_job(USER_ID, jid)
     stuck.updated_at = utcnow() - timedelta(hours=2)
     store.jobs[jid] = stuck                    # bypass put_job's timestamp
     store.blobs[(UPLOADS_CONTAINER, f"{jid}/c.mp4")] = b"x"
 
     assert client.post(f"/api/jobs/{jid}/retry").status_code == 200
-    assert store.queued == [jid]
+    assert store.queued == [(USER_ID, jid)]
 
 
 def test_retries_are_capped(client, store):
@@ -465,10 +483,10 @@ def test_retry_stops_after_the_cap_is_reached(client, store):
     for _ in range(5):
         if client.post(f"/api/jobs/{jid}/retry").status_code != 200:
             break
-        job = store.get_job(jid)              # worker fails it again
+        job = store.get_job(USER_ID, jid)              # worker fails it again
         job.status = JobStatus.FAILED
         store.put_job(job)
-    assert store.get_job(jid).attempts == 3
+    assert store.get_job(USER_ID, jid).attempts == 3
     assert len(store.queued) == 2             # attempts 2 and 3
 
 
@@ -540,7 +558,7 @@ def test_delete_removes_the_row_and_every_blob(client, store):
     store.blobs[(UPLOADS_CONTAINER, "ffffffffffffffff/other.mp4")] = b"keep"
 
     assert client.delete(f"/api/jobs/{jid}").status_code == 204
-    assert store.get_job(jid) is None
+    assert store.get_job(USER_ID, jid) is None
     assert not any(jid in path for _, path in store.blobs)
     # a neighbouring job is untouched
     assert (UPLOADS_CONTAINER, "ffffffffffffffff/other.mp4") in store.blobs
@@ -566,7 +584,7 @@ def test_delete_refuses_once_committed_to_a_worker(client, store, status):
     r = client.delete(f"/api/jobs/{jid}")
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "job_busy"
-    assert store.get_job(jid) is not None
+    assert store.get_job(USER_ID, jid) is not None
 
 
 def test_delete_still_works_before_submitting(client, store):
@@ -579,7 +597,7 @@ def test_delete_allows_a_stalled_job(client, store):
     from datetime import timedelta
     jid = "0123456789abcdef"
     _put(store, jid, status=JobStatus.PROCESSING, filename="c.mp4")
-    stuck = store.get_job(jid)
+    stuck = store.get_job(USER_ID, jid)
     stuck.updated_at = utcnow() - timedelta(hours=2)
     store.jobs[jid] = stuck
     assert client.delete(f"/api/jobs/{jid}").status_code == 204

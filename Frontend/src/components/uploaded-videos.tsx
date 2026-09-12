@@ -349,6 +349,7 @@ export function UploadedVideos({
           key={open.job_id}
           job={open}
           onClose={() => setOpen(null)}
+          onSubmitted={onReload}
           onDeleted={(id) => {
             // Dropped locally rather than refetched: the row should go the
             // instant the delete succeeds, not after a round trip.
