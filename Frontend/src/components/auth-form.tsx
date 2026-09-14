@@ -99,13 +99,16 @@ export function AuthForm({ mode }: { mode: "signin" | "signup" }) {
 
   const rules = passwordRules(limits);
   const passwordOk = allRulesMet(rules, password);
-  const canSubmit = !busy && (!isSignUp || passwordOk);
+  // Both forms need something in both fields. Submitting an empty one only
+  // buys a round trip and a server error, so the button says so instead.
+  const filled = email.trim() !== "" && password !== "";
+  const canSubmit = !busy && filled && (!isSignUp || passwordOk);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
-    if (isSignUp && !passwordOk) return;
+    if (!canSubmit) return;
 
     setBusy(true);
     try {
