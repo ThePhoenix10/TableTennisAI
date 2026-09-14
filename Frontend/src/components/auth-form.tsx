@@ -2,23 +2,66 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
-import { ApiError, signIn, signUp } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { ApiError, getLimits, signIn, signUp } from "@/lib/api";
+import type { Limits } from "@/lib/api-types";
 import { setSession } from "@/lib/auth";
+import {
+  allRulesMet,
+  passwordRules,
+  type PasswordRule,
+} from "@/lib/password-rules";
 
-/** Mirrors `password_problems` in core/auth.py. The rule lives in the backend;
- *  this exists so the message arrives before a round trip, not instead of one. */
-const MIN_LENGTH = 8;
-const SPECIALS = "!@#$%^&*()_+-=[]{}|;:',.<>?/`~\"\\";
-
-export function passwordProblems(password: string): string[] {
-  const out: string[] = [];
-  if (password.length < MIN_LENGTH)
-    out.push(`be at least ${MIN_LENGTH} characters`);
-  if (!/[A-Z]/.test(password)) out.push("contain an uppercase letter");
-  if (![...password].some((c) => SPECIALS.includes(c)))
-    out.push("contain a special character");
-  return out;
+/**
+ * The rules, ticking as you type.
+ *
+ * Each row states its own state in words as well as a glyph, so the list is
+ * readable without relying on the tick's colour. `aria-live="polite"` on the
+ * group announces a rule being satisfied without interrupting typing; the
+ * individual rows are not live, or every keystroke would be narrated.
+ */
+function PasswordChecklist({
+  rules,
+  password,
+}: {
+  rules: PasswordRule[];
+  password: string;
+}) {
+  return (
+    <ul id="password-rules" aria-live="polite" className="mt-2 space-y-1">
+      {rules.map((rule) => {
+        const met = rule.met(password);
+        return (
+          <li
+            key={rule.id}
+            className={`flex items-center gap-2 text-xs ${
+              met ? "text-ink" : "text-ink-muted"
+            }`}
+          >
+            <span
+              aria-hidden
+              className={`flex size-4 shrink-0 items-center justify-center rounded-full border text-[10px] leading-none ${
+                met ? "text-white" : "border-border"
+              }`}
+              style={
+                met
+                  ? {
+                      backgroundColor: "var(--color-control)",
+                      borderColor: "var(--color-control)",
+                    }
+                  : undefined
+              }
+            >
+              {met ? "✓" : ""}
+            </span>
+            {rule.label}
+            {/* The state in words, for anyone not seeing the tick. */}
+            <span className="sr-only">{met ? " — done" : " — not yet"}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 const field =
@@ -36,21 +79,33 @@ export function AuthForm({ mode }: { mode: "signin" | "signup" }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [touched, setTouched] = useState(false);
+  const [limits, setLimits] = useState<Limits | null>(null);
 
-  const problems = isSignUp && touched ? passwordProblems(password) : [];
+  // The rules come from the API. Until they arrive the fallback is the
+  // strictest reading, so the form is never more permissive than the server.
+  useEffect(() => {
+    if (!isSignUp) return;
+    let cancelled = false;
+    getLimits().then(
+      (l) => {
+        if (!cancelled) setLimits(l);
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [isSignUp]);
+
+  const rules = passwordRules(limits);
+  const passwordOk = allRulesMet(rules, password);
+  const canSubmit = !busy && (!isSignUp || passwordOk);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
-    if (isSignUp) {
-      const p = passwordProblems(password);
-      if (p.length) {
-        setTouched(true);
-        return;
-      }
-    }
+    if (isSignUp && !passwordOk) return;
 
     setBusy(true);
     try {
@@ -129,23 +184,12 @@ export function AuthForm({ mode }: { mode: "signin" | "signup" }) {
           type="password"
           required
           autoComplete={isSignUp ? "new-password" : "current-password"}
-          aria-describedby={isSignUp ? "password-rule" : undefined}
+          aria-describedby={isSignUp ? "password-rules" : undefined}
           className={`${field} mt-1`}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          onBlur={() => setTouched(true)}
         />
-        {isSignUp && (
-          <p id="password-rule" className="text-ink-muted mt-1 text-xs">
-            At least {MIN_LENGTH} characters, with an uppercase letter and a
-            special character.
-          </p>
-        )}
-        {problems.length > 0 && (
-          <p className="mt-1 text-xs" style={{ color: "var(--color-attack)" }}>
-            The password must {problems.join(", ")}.
-          </p>
-        )}
+        {isSignUp && <PasswordChecklist rules={rules} password={password} />}
       </div>
 
       {error && (
@@ -163,8 +207,18 @@ export function AuthForm({ mode }: { mode: "signin" | "signup" }) {
 
       <button
         type="submit"
-        disabled={busy}
-        className="bg-brand text-on-brand hover:bg-brand-hover w-full cursor-pointer rounded px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+        // aria-disabled rather than disabled: a disabled button cannot be
+        // focused and screen readers skip past it, so someone tabbing through
+        // would never learn the form exists to be completed. This stays
+        // reachable and announces itself as unavailable; submit() returns
+        // early, and the checklist above says what is missing.
+        aria-disabled={!canSubmit}
+        aria-describedby={isSignUp ? "password-rules" : undefined}
+        className={`bg-brand text-on-brand w-full rounded px-4 py-2 text-sm font-medium ${
+          canSubmit
+            ? "hover:bg-brand-hover cursor-pointer"
+            : "cursor-not-allowed opacity-50"
+        }`}
       >
         {busy ? "Working…" : isSignUp ? "Create account" : "Sign in"}
       </button>

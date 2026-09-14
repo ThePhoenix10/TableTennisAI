@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from pongai.api.deps import demo_id as demo_id_dep
 from pongai.api.deps import storage
 from pongai.api.errors import ApiError
+from pongai.core.auth import password_payload
 from pongai.core.schema import (
     AnalysisMeta,
     DemoAnalysis,
@@ -49,9 +50,15 @@ def limits() -> dict:
 
     `model` carries the same argument one module over: per-class precision and
     the position/velocity kinematics split live in core.schema, and the
-    frontend needs both to decide what to suppress from findings.
+    frontend needs both to decide what to suppress from findings. `password`
+    likewise, so the sign-up checklist is driven by the rule the API enforces
+    rather than a copy of it.
     """
-    return {**limits_payload(), "model": model_payload()}
+    return {
+        **limits_payload(),
+        "model": model_payload(),
+        "password": password_payload(),
+    }
 
 
 def _demo_urls(store: Storage, vid: str) -> dict:

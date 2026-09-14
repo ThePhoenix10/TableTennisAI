@@ -112,7 +112,7 @@ def store():
 
 
 SIGNUP = {"email": "ada@example.com", "first_name": "Ada",
-          "last_name": "Lovelace", "password": "Passw0rd!"}
+          "last_name": "Lovelace", "password": "Passw0rd!2026"}
 
 
 @pytest.fixture

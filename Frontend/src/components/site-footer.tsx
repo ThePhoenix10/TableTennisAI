@@ -20,7 +20,7 @@ export function SiteFooter() {
             </span>
             <p className="text-ink-muted mt-3 text-sm">
               Table-tennis analysis from body pose alone. No ball tracking, no
-              sensors — just a video of your match.
+              sensors. Just a video of your match.
             </p>
           </div>
 

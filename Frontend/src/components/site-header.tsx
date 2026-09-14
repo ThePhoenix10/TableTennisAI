@@ -34,6 +34,17 @@ export function SiteHeader() {
         </Link>
 
         <div className="ml-auto flex items-center gap-3">
+          {/* Outlined, matching Sign in: both are secondary to Upload video,
+              which stays the only filled control. Hidden on the narrowest
+              screens, where it is one item too many beside a primary action
+              and the account menu — the footer still carries it. */}
+          <Link
+            href="/how-it-works/"
+            className="border-border hidden rounded border px-3 py-1.5 text-sm sm:inline-block"
+          >
+            How it works
+          </Link>
+
           <button
             type="button"
             onClick={uploadVideo}

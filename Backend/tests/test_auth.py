@@ -6,7 +6,7 @@ from pongai.core.schema import Job, JobStatus, utcnow
 from pongai.core.storage import UPLOADS_CONTAINER
 
 OTHER = {"email": "grace@example.com", "first_name": "Grace",
-         "last_name": "Hopper", "password": "Passw0rd!"}
+         "last_name": "Hopper", "password": "Passw0rd!2026"}
 
 
 # =============================================================================
@@ -27,9 +27,9 @@ def test_signup_returns_a_session_and_never_the_hash(anon, signup):
 
 
 @pytest.mark.parametrize("password,missing", [
-    ("Sh0rt!", "at least 8 characters"),
-    ("alllowercase!", "uppercase letter"),
-    ("NoSpecial123", "special character"),
+    ("Sh0rt!Pass", "at least 12 characters"),
+    ("alllowercase!2026", "uppercase letter"),
+    ("NoSpecialChars12", "special character"),
 ])
 def test_weak_passwords_are_refused_with_the_reason(anon, password, missing, signup):
     r = anon.post("/api/auth/signup", json={**signup, "password": password})
@@ -83,7 +83,7 @@ def test_bad_credentials_are_indistinguishable(anon, signup, wrong_account):
     anon.post("/api/auth/signup", json=signup)
     r = anon.post("/api/auth/signin", json={
         "email": "nobody@example.com" if wrong_account else signup["email"],
-        "password": "Passw0rd!" if wrong_account else "Wr0ngPass!"})
+        "password": "Passw0rd!2026" if wrong_account else "Wr0ngPass!"})
     assert r.status_code == 401
     assert r.json()["error"]["code"] == "invalid_credentials"
     assert r.json()["error"]["message"] == (
@@ -251,3 +251,21 @@ def test_an_upload_is_owned_by_whoever_created_it(client, store, probe):
     assert r.status_code == 200, r.text
     me = client.get("/api/auth/me").json()
     assert store.jobs[r.json()["job_id"]].user_id == me["user_id"]
+
+
+def test_the_policy_is_served_so_the_browser_can_tick_a_checklist(anon):
+    """The sign-up form ticks each rule as someone types. Hardcoding the rules
+    there would be a second copy of what core.auth owns."""
+    p = anon.get("/api/limits").json()["password"]
+    assert p["min_length"] == 12
+    assert p["requires_uppercase"] is True
+    assert p["requires_special"] is True
+    assert "!" in p["special_characters"]
+
+
+def test_a_password_one_short_of_the_floor_is_refused(anon, signup):
+    eleven = "Passw0rd!12"
+    assert len(eleven) == 11
+    r = anon.post("/api/auth/signup", json={**signup, "password": eleven})
+    assert r.status_code == 422
+    assert "at least 12 characters" in r.json()["error"]["message"]

@@ -36,9 +36,14 @@ class Limits:
 
     # 30fps works for detection and classification (96% class agreement in
     # testing) but loses ~54% of peak wrist speed, so velocity metrics are
-    # withheld below 60. Below 30 the stroke is too sparsely sampled to detect
-    # reliably at all.
-    MIN_FPS = 30
+    # withheld below 60. Much below that the stroke is too sparsely sampled to
+    # detect reliably at all.
+    #
+    # The floor is 28 rather than 30 so nominally-30fps footage is not turned
+    # away on a rounding error: NTSC "30fps" is really 30000/1001 = 29.97, and
+    # a strict >= 30 rejects it. The two frames of margin cost nothing — the
+    # measurements at 29.97 and 30 are indistinguishable.
+    MIN_FPS = 28
     MAX_FPS = 240
 
     # Velocity kinematics are withheld below this. The single owner of the
@@ -168,9 +173,9 @@ def validate_probe(p: VideoProbe) -> list[Rejection]:
             code=RejectionCode.FPS_TOO_LOW,
             message=f"This video is {p.fps:.0f}fps. PongAI needs at least "
                     f"{L.MIN_FPS}fps.",
-            detail="A stroke's acceleration phase lasts about 120ms. Below "
-                   "30fps that is only three frames, which is too few to "
-                   "detect the stroke reliably."))
+            detail=f"A stroke's acceleration phase lasts about 120ms, which "
+                   f"is barely three frames at {L.MIN_FPS}fps. Below that it "
+                   f"is sampled too sparsely to detect the stroke reliably."))
     elif p.fps > L.MAX_FPS:
         out.append(Rejection(
             code=RejectionCode.FPS_TOO_HIGH,

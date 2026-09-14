@@ -73,8 +73,7 @@ export function validateAgainstLimits(
         code: "fps_too_low",
         severity: "reject",
         message: `This video is ${Math.round(p.fps)}fps. PongAI needs at least ${L.min_fps}fps.`,
-        detail:
-          "A stroke's acceleration phase lasts about 120ms. Below 30fps that is only three frames, which is too few to detect the stroke reliably.",
+        detail: `A stroke's acceleration phase lasts about 120ms, which is barely three frames at ${L.min_fps}fps. Below that it is sampled too sparsely to detect the stroke reliably.`,
       });
     } else if (p.fps > L.max_fps) {
       out.push({
