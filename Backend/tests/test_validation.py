@@ -63,3 +63,16 @@ def test_velocity_reliability_boundary():
 
 def test_gpu_estimate():
     assert probe(duration_s=300).estimated_gpu_seconds == 1500
+
+
+@pytest.mark.parametrize("fps,accepted", [
+    (24, False),
+    (27.9, False),
+    (28, True),
+    (30000 / 1001, True),   # NTSC "30fps" is 29.97
+    (30, True),
+])
+def test_the_frame_rate_floor_admits_ntsc_30(fps, accepted):
+    """The floor is 28, not 30, so nominally-30fps footage is not turned away
+    on a rounding error. A strict >= 30 rejects every NTSC recording."""
+    assert is_acceptable(validate_probe(probe(fps=fps))) is accepted
