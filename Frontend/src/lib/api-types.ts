@@ -164,6 +164,14 @@ export interface Limits {
   min_aspect: number;
   velocity_min_fps: number;
   guidance: { camera: string; fps: string; stability: string };
+  /** The sign-up rules, so the checklist is driven by what the API enforces
+   *  rather than a copy of it. */
+  password: {
+    min_length: number;
+    requires_uppercase: boolean;
+    requires_special: boolean;
+    special_characters: string;
+  };
   model: {
     schema_version: number;
     class_precision: Record<string, number>;

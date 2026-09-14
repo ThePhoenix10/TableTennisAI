@@ -22,10 +22,25 @@ from argon2.exceptions import VerifyMismatchError, VerificationError
 
 # --- passwords ---------------------------------------------------------------
 
-MIN_PASSWORD_LENGTH = 8
+MIN_PASSWORD_LENGTH = 12
 SPECIAL_CHARS = "!@#$%^&*()_+-=[]{}|;:',.<>?/`~\"\\"
 
 _hasher = PasswordHasher()
+
+
+def password_payload() -> dict:
+    """The policy, served at GET /api/limits.
+
+    The browser needs these to tick a checklist as someone types. Hardcoding
+    them there would be a second copy of a rule this module exists to own — the
+    same argument as `limits_payload` for the upload constraints.
+    """
+    return {
+        "min_length": MIN_PASSWORD_LENGTH,
+        "requires_uppercase": True,
+        "requires_special": True,
+        "special_characters": SPECIAL_CHARS,
+    }
 
 
 def password_problems(password: str) -> list[str]:
