@@ -6,19 +6,27 @@ export const metadata: Metadata = { title: "Create account" };
 
 export default function Page() {
   return (
-    <div className="mx-auto max-w-md px-4 py-16 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight">
-        Create an account
-      </h1>
-      <p className="text-ink-muted mt-2 text-sm">
-        You will need one to upload a match. The demos are open to everyone.
-      </p>
-      <div className="rounded-card border-border bg-surface mt-6 border p-6">
-        {/* AuthForm reads ?next= via useSearchParams, which needs a boundary
-            to prerender. */}
-        <Suspense fallback={<p className="text-sm">Loading…</p>}>
-          <AuthForm mode="signup" />
-        </Suspense>
+    <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center px-4 py-16 sm:px-6 bg-slate-50">
+      <div className="w-full max-w-md">
+        <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-xl">
+          <div className="mb-8 text-center">
+            <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl gradient-brand shadow-md glow-brand text-xl">
+              🏓
+            </div>
+            <h1 className="text-xl font-bold text-slate-900">Create your account</h1>
+            <p className="mt-1.5 text-sm text-slate-500">
+              Upload and analyse your table tennis matches
+            </p>
+          </div>
+
+          <Suspense fallback={<p className="text-sm text-slate-400">Loading…</p>}>
+            <AuthForm mode="signup" />
+          </Suspense>
+        </div>
+
+        <p className="mt-6 text-center text-xs text-slate-400">
+          The demos are open to everyone — no account needed.
+        </p>
       </div>
     </div>
   );
