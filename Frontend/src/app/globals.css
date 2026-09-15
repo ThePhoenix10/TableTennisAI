@@ -1,76 +1,53 @@
 @import "tailwindcss";
 
-/* ---------------------------------------------------------------------------
-   PongAI design system — see PONGAI_FRONTEND_SPEC.md §2.
-
-   Every contrast ratio noted below is measured against the stated background.
-   The brand orange (#f55f02) is 2.46:1 on the page background and FAILS
-   WCAG AA for text: it is a fill colour only. Use `--color-brand-text` when
-   an orange-looking *text* colour is needed.
---------------------------------------------------------------------------- */
-
 @theme {
-  /* Reset Tailwind's default type scale — the spec allows exactly six sizes. */
   --text-*: initial;
-  --text-xs: 0.75rem; /* 12 */
+  --text-xs: 0.75rem;
   --text-xs--line-height: 1rem;
-  --text-sm: 0.875rem; /* 14 */
+  --text-sm: 0.875rem;
   --text-sm--line-height: 1.25rem;
-  --text-base: 1rem; /* 16 */
+  --text-base: 1rem;
   --text-base--line-height: 1.5rem;
-  --text-lg: 1.25rem; /* 20 */
+  --text-lg: 1.25rem;
   --text-lg--line-height: 1.75rem;
-  --text-xl: 1.75rem; /* 28 */
+  --text-xl: 1.75rem;
   --text-xl--line-height: 2.25rem;
-  --text-2xl: 2.5rem; /* 40 */
+  --text-2xl: 2.5rem;
   --text-2xl--line-height: 3rem;
 
-  /* A seventh size, for the hero wordmark ONLY.
-     The six sizes above are for data-dense screens; a landing hero is a
-     different problem, and 40px is lost against full-bleed video. This starts
-     at that same 40px ceiling on a phone and grows with the viewport, so on a
-     small screen it IS the scale rather than an exception to it. */
   --text-display: clamp(2.5rem, 7vw, 4.5rem);
   --text-display--line-height: 1.05;
 
-  /* Sans-serif system stack; monospace reserved for numerals and code. */
-  --font-sans:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji",
-    "Segoe UI Emoji";
-  --font-mono:
-    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
-    monospace;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
-  /* Brand */
-  --color-brand: #f55f02; /* fills, bars, active states, focus rings */
-  --color-brand-text: #a63e02; /* 4.85:1 on bg — orange TEXT when needed */
-  --color-brand-hover: #d95202;
-  --color-on-brand: #000000; /* 6.52:1 — text ON an orange button is BLACK */
+  /* Brand — orange */
+  --color-brand: #ea580c;
+  --color-brand-text: #c2410c;
+  --color-brand-hover: #c2410c;
+  --color-on-brand: #ffffff;
 
-  /* Surfaces */
-  --color-bg: #e6e0dc;
+  /* Surfaces — light */
+  --color-bg: #f5f7fa;
   --color-surface: #ffffff;
-  --color-border: #d4ccc6;
+  --color-surface-2: #f0f4f8;
+  --color-border: #e2e8f0;
+  --color-border-subtle: #cbd5e1;
 
   /* Text */
-  --color-ink: #000000; /* 16.06:1 */
-  --color-ink-muted: #5a5350; /* 5.76:1 */
-  --color-ink-subtle: #7a726e; /* 3.60:1 — decorative only, never body text */
+  --color-ink: #0f172a;
+  --color-ink-muted: #475569;
+  --color-ink-subtle: #94a3b8;
 
-  /* Shot classes — all verified >= 4.5:1 on both #e6e0dc and #ffffff.
-     Colour NEVER carries meaning alone; pair with the S/A/C/D letter. */
-  --color-serve: #1d4ed8; /* 5.13:1 */
-  --color-attack: #b91c1c; /* 4.95:1 */
-  --color-control: #065f46; /* 5.88:1 */
-  --color-defence: #854d0e; /* 5.24:1 */
+  /* Shot classes */
+  --color-serve: #2563eb;
+  --color-attack: #dc2626;
+  --color-control: #059669;
+  --color-defence: #d97706;
 
-  /* Cards: flat, 8px radius, no drop shadows. */
-  --radius-card: 0.5rem;
+  --radius-card: 0.75rem;
 }
 
-/* Single fixed palette — no dark mode. Prevents the UA from re-tinting
-   form controls and scrollbars against the light background. */
 :root {
   color-scheme: light;
 }
@@ -84,14 +61,13 @@
     background-color: var(--color-bg);
     color: var(--color-ink);
     font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
   }
 
-  /* Data-dense product: numbers must sit in columns that do not jitter. */
   :where(table, [data-numeric], .tabular) {
     font-variant-numeric: tabular-nums;
   }
 
-  /* Visible focus, using the brand orange as an outline (a fill, not text). */
   :focus-visible {
     outline: 2px solid var(--color-brand);
     outline-offset: 2px;
@@ -99,9 +75,6 @@
 }
 
 @layer utilities {
-  /* Uncertain shots (`abstain === true`) carry a diagonal hatch in addition
-     to reduced opacity, so the signal survives colour-vision deficiency and
-     greyscale printing. See spec §7.1. */
   .hatch-uncertain {
     background-image: repeating-linear-gradient(
       45deg,
@@ -109,17 +82,33 @@
       color-mix(in srgb, currentColor 45%, transparent) 3px 5px
     );
   }
-}
 
-/* Motion is minimal by design (150ms ease-out); honour the OS preference. */
-@media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
+  .glass {
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(0, 0, 0, 0.06);
   }
 
-  *,
-  *::before,
-  *::after {
+  .glow-brand {
+    box-shadow: 0 0 24px rgba(234, 88, 12, 0.35);
+  }
+
+  .gradient-brand {
+    background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+  }
+
+  .gradient-text {
+    background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
@@ -127,36 +116,20 @@
   }
 }
 
-/* ---------------------------------------------------------------------------
-   Hero entrance.
-
-   Content is fully visible by default and only animates where motion is
-   welcome, so `prefers-reduced-motion` gets the finished state with nothing
-   to opt out of. The delays stagger the wordmark, the sub-lines, the measured
-   figures and the buttons in reading order.
---------------------------------------------------------------------------- */
-
 @media (prefers-reduced-motion: no-preference) {
   @keyframes hero-rise {
-    from {
-      opacity: 0;
-      transform: translateY(0.6em);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-    }
+    from { opacity: 0; transform: translateY(0.6em); }
+    to { opacity: 1; transform: none; }
   }
 
   @keyframes hero-dot {
-    from {
-      opacity: 0;
-      transform: scale(0.2);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-    }
+    from { opacity: 0; transform: scale(0.2); }
+    to { opacity: 1; transform: none; }
+  }
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 
   .hero-rise {
@@ -165,5 +138,9 @@
 
   .hero-dot {
     animation: hero-dot 600ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  }
+
+  .fade-in {
+    animation: fade-in 500ms ease both;
   }
 }

@@ -11,12 +11,12 @@ export function SiteHeader() {
   const uploadVideo = useUploadAction();
 
   return (
-    <header className="border-border bg-surface border-b">
+    <header className="sticky top-0 z-50 glass border-b border-black/5 shadow-sm">
       <a href="#main" className="focus:bg-brand focus:text-on-brand sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:rounded focus:px-3 focus:py-2 focus:text-sm">
         Skip to content
       </a>
-      <div className="flex h-16 w-full items-center gap-3 pr-6">
-        <Link href="/" className="flex items-center rounded">
+      <div className="flex h-16 w-full items-center gap-4 pr-6">
+        <Link href="/" className="flex items-center">
           <Image
             src="/PongAILogo.jpeg"
             alt="PongAI"
@@ -28,14 +28,17 @@ export function SiteHeader() {
         </Link>
 
         <div className="ml-auto flex items-center gap-3">
-          <Link href="/how-it-works/" className="border-border hidden rounded border px-3 py-1.5 text-sm sm:inline-block">
+          <Link
+            href="/how-it-works/"
+            className="hidden rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors sm:inline-block"
+          >
             How it works
           </Link>
 
           <button
             type="button"
             onClick={uploadVideo}
-            className="bg-brand text-on-brand hover:bg-brand-hover cursor-pointer rounded px-3 py-1.5 text-sm font-medium"
+            className="cursor-pointer rounded-lg gradient-brand px-4 py-2 text-sm font-semibold text-white shadow-md hover:opacity-90 transition-opacity glow-brand"
           >
             Upload video
           </button>
@@ -44,7 +47,10 @@ export function SiteHeader() {
             (user ? (
               <AccountMenu user={user} onSignOut={signOut} />
             ) : (
-              <Link href="/signin/" className="border-border rounded border px-3 py-1.5 text-sm">
+              <Link
+                href="/signin/"
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-colors shadow-sm"
+              >
                 Sign in
               </Link>
             ))}
