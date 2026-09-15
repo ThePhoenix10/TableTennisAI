@@ -39,8 +39,8 @@ export function ProfileView() {
         <h2 className="text-base font-semibold">Password</h2>
         <p className="text-ink-muted mt-1 text-sm">
           There is no self-service reset yet. Email{" "}
-          <a href="mailto:support@pongai.example" className="underline">
-            support@pongai.example
+          <a href="mailto:info@sportsforequity.live" className="underline">
+            info@sportsforequity.live
           </a>{" "}
           from this address and we will reset it for you.
         </p>

@@ -159,7 +159,7 @@ function HeroCopy({
           href="/analysis/game_1/"
           className="bg-brand text-on-brand hover:bg-brand-hover rounded px-5 py-2.5 text-sm font-medium"
         >
-          Watch a real analysis
+          Watch Demo analysis
         </Link>
         <button
           type="button"

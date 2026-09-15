@@ -40,7 +40,7 @@ const SECTIONS = [
   {
     h: "Your choices",
     p: [
-      "You can delete any video from the app at any time. To close your account and remove everything at once, email support@pongai.example.",
+      "You can delete any video from the app at any time. To close your account and remove everything at once, email info@sportsforequity.live.",
     ],
   },
 ];

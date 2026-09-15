@@ -6,22 +6,22 @@ const REASONS = [
   {
     h: "A password you cannot remember",
     p: "There is no self-service reset yet. Email us from the address on the account and we will reset it.",
-    to: "support@pongai.example",
+    to: "info@sportsforequity.live",
   },
   {
     h: "Something went wrong with an analysis",
     p: "Send the name of the video and roughly when you uploaded it. The job record keeps the reason it failed, which usually explains it straight away.",
-    to: "support@pongai.example",
+    to: "info@sportsforequity.live",
   },
   {
     h: "Deleting your account",
     p: "Ask and we will remove the account, every video on it and every analysis. It cannot be undone.",
-    to: "support@pongai.example",
+    to: "info@sportsforequity.live",
   },
   {
     h: "Research, data or anything else",
     p: "The model, the measurements and where it falls short — happy to talk about any of it.",
-    to: "hello@pongai.example",
+    to: "info@sportsforequity.live",
   },
 ];
 
