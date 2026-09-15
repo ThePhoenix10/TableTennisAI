@@ -16,7 +16,7 @@ export function DashboardGlimpse({ stats }: { stats: DemoStats | null }) {
     >
       <div className="max-w-2xl">
         <h2 id="glimpse-heading" className="text-xl font-semibold">
-          What you get back
+          Demo Analysis
         </h2>
         <p className="text-ink-muted mt-2">
           Every shot on a timeline, both players tracked side by side, and the

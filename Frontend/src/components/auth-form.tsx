@@ -249,8 +249,8 @@ export function AuthForm({ mode }: { mode: "signin" | "signup" }) {
         // something that does not exist.
         <p className="text-ink-subtle text-xs">
           Forgotten your password? Email{" "}
-          <a href="mailto:support@pongai.example" className="underline">
-            support@pongai.example
+          <a href="mailto:info@sportsforequity.live" className="underline">
+            info@sportsforequity.live
           </a>{" "}
           and we will reset it for you.
         </p>
