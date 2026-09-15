@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useUploadAction } from "@/lib/use-upload-action";
 
 export function SiteFooter() {
@@ -11,13 +12,15 @@ export function SiteFooter() {
       <div className="mx-auto max-w-[1280px] px-4 py-10 sm:px-6">
         <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <span className="flex items-center gap-2 text-sm font-semibold">
-              <span
-                aria-hidden
-                className="bg-brand inline-block size-2.5 rounded-full"
+            <Link href="/" className="flex items-center">
+              <Image
+                src="/PongAILogo.jpeg"
+                alt="PongAI"
+                width={150}
+                height={50}
+                className="h-12 w-auto object-contain"
               />
-              PongAI
-            </span>
+            </Link>
             <p className="text-ink-muted mt-3 text-sm">
               Table-tennis analysis from body pose alone. No ball tracking, no
               sensors. Just a video of your match.
@@ -39,10 +42,7 @@ export function SiteFooter() {
                 </button>
               </li>
               <li>
-                <Link
-                  href="/how-it-works/"
-                  className="text-ink-muted hover:text-ink underline"
-                >
+                <Link href="/how-it-works/" className="text-ink-muted hover:text-ink underline">
                   How it works
                 </Link>
               </li>
@@ -55,18 +55,12 @@ export function SiteFooter() {
             </h2>
             <ul className="mt-3 space-y-2 text-sm">
               <li>
-                <Link
-                  href="/contact/"
-                  className="text-ink-muted hover:text-ink underline"
-                >
+                <Link href="/contact/" className="text-ink-muted hover:text-ink underline">
                   Contact us
                 </Link>
               </li>
               <li>
-                <Link
-                  href="/privacy/"
-                  className="text-ink-muted hover:text-ink underline"
-                >
+                <Link href="/privacy/" className="text-ink-muted hover:text-ink underline">
                   Privacy policy
                 </Link>
               </li>
