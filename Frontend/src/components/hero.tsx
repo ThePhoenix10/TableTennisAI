@@ -19,14 +19,9 @@ function useReducedMotion(): boolean {
 
 function HeroMedia() {
   const reduced = useReducedMotion();
-
   if (reduced) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img src="/hero/rally-poster.jpg" alt="" aria-hidden className="h-full w-full object-cover" />
-    );
+    return <img src="/hero/rally-poster.jpg" alt="" aria-hidden className="h-full w-full object-cover" />;
   }
-
   return (
     <video
       src="/hero/rally.mp4"
@@ -40,115 +35,136 @@ function HeroMedia() {
 export function Hero() {
   const uploadVideo = useUploadAction();
   const { user, ready } = useSession();
-  const secondary = ready && user ? "Go to your dashboard" : "Upload your match";
+  const secondary = ready && user ? "Go to dashboard" : "Upload your match";
 
   return (
-    <section className="relative border-b border-slate-200 overflow-hidden">
-      <div className="relative mx-auto max-w-[1600px]">
-        <div className="relative aspect-video w-full overflow-hidden lg:aspect-[12/5]">
-          <HeroMedia />
+    <section className="relative overflow-hidden">
+      {/* Full-bleed video */}
+      <div className="relative aspect-video w-full overflow-hidden lg:aspect-[12/5]">
+        <HeroMedia />
+        {/* Gradient: dark at bottom for text legibility on mobile, clear at top */}
+        <div
+          aria-hidden
+          className="absolute inset-0"
+          style={{
+            background: "linear-gradient(to top, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.28) 45%, rgba(0,0,0,0.05) 100%)",
+          }}
+        />
+        {/* Desktop: left-side text panel with a vertical gradient  */}
+        <div
+          aria-hidden
+          className="absolute inset-0 hidden lg:block"
+          style={{
+            background: "linear-gradient(to right, rgba(0,0,0,0.78) 0%, rgba(0,0,0,0.45) 38%, rgba(0,0,0,0.00) 65%)",
+          }}
+        />
 
-          {/* Minimal scrim — only behind text, keeps video bright */}
-          <div
-            aria-hidden
-            className="absolute inset-0"
-            style={{
-              background:
-                "radial-gradient(ellipse 55% 70% at 50% 48%, rgba(0,0,0,.40) 0%, rgba(0,0,0,.12) 55%, rgba(0,0,0,.00) 100%)",
-            }}
-          />
+        {/* Desktop copy — left-aligned over video */}
+        <div className="absolute inset-0 hidden lg:flex items-end pb-12 px-10 xl:px-16">
+          <div className="max-w-xl">
+            <div
+              className="hero-rise mb-5 inline-flex items-center gap-2 rounded-full border border-orange-400/40 bg-orange-500/20 px-4 py-1.5 text-xs font-semibold text-orange-200 backdrop-blur-sm"
+              style={{ animationDelay: "60ms" }}
+            >
+              <span className="size-1.5 rounded-full bg-orange-400 inline-block" />
+              AI-powered table tennis analysis
+            </div>
 
-          {/* Desktop copy — over video */}
-          <div className="absolute inset-0 hidden items-center lg:flex" style={{ zIndex: 10 }}>
-            <div className="w-full px-6 py-10 xl:px-10">
-              <HeroCopy onUpload={uploadVideo} secondary={secondary} textOnVideo />
+            <h1
+              className="hero-rise text-[length:var(--text-display)] font-bold leading-[1.05] tracking-tight text-white"
+              style={{ animationDelay: "120ms" }}
+            >
+              Every shot.<br />
+              <span className="gradient-text">Understood.</span>
+            </h1>
+
+            <p
+              className="hero-rise mt-5 text-base text-white/75 max-w-md leading-relaxed"
+              style={{ animationDelay: "200ms" }}
+            >
+              PongAI reads your match from body movement alone — no ball tracking, no sensors. Every shot timed, attributed and measured.
+            </p>
+
+            <div
+              className="hero-rise mt-8 flex flex-wrap gap-3"
+              style={{ animationDelay: "280ms" }}
+            >
+              <Link
+                href="/analysis/game_1/"
+                className="rounded-xl gradient-brand px-6 py-3 text-sm font-bold text-white shadow-lg hover:opacity-90 transition-opacity glow-brand"
+              >
+                Watch Demo
+              </Link>
+              <button
+                type="button"
+                onClick={uploadVideo}
+                className="cursor-pointer rounded-xl border border-white/25 bg-white/10 px-6 py-3 text-sm font-semibold text-white hover:bg-white/20 transition-all backdrop-blur-sm"
+              >
+                {secondary}
+              </button>
+            </div>
+
+            {/* Inline stats */}
+            <div
+              className="hero-rise mt-10 flex gap-8"
+              style={{ animationDelay: "360ms" }}
+            >
+              {[
+                { value: "99.4%", label: "Attribution accuracy" },
+                { value: "120fps", label: "Pose tracking" },
+                { value: "13", label: "Metrics per shot" },
+              ].map((s) => (
+                <div key={s.label}>
+                  <div className="text-2xl font-bold text-white tabular-nums">{s.value}</div>
+                  <div className="mt-0.5 text-xs text-white/45 uppercase tracking-wide">{s.label}</div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
+      </div>
 
-        {/* Mobile copy — below video on light background */}
-        <div className="bg-white px-4 pt-10 pb-12 sm:px-6 lg:hidden border-t border-slate-100">
-          <HeroCopy onUpload={uploadVideo} secondary={secondary} textOnVideo={false} />
+      {/* Mobile copy — below video */}
+      <div className="bg-slate-900 px-5 pt-8 pb-10 lg:hidden">
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-orange-400/30 bg-orange-500/15 px-4 py-1.5 text-xs font-semibold text-orange-400">
+          <span className="size-1.5 rounded-full bg-orange-400 inline-block" />
+          AI-powered table tennis analysis
+        </div>
+        <h1 className="text-3xl font-bold tracking-tight text-white">
+          Every shot.<br />
+          <span className="gradient-text">Understood.</span>
+        </h1>
+        <p className="mt-4 text-sm text-slate-400 leading-relaxed">
+          PongAI reads your match from body movement alone — no ball tracking, no sensors. Every shot timed, attributed and measured.
+        </p>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link
+            href="/analysis/game_1/"
+            className="rounded-xl gradient-brand px-5 py-2.5 text-sm font-bold text-white glow-brand"
+          >
+            Watch Demo
+          </Link>
+          <button
+            type="button"
+            onClick={uploadVideo}
+            className="cursor-pointer rounded-xl border border-white/15 bg-white/5 px-5 py-2.5 text-sm font-semibold text-slate-300"
+          >
+            {secondary}
+          </button>
+        </div>
+        <div className="mt-8 grid grid-cols-3 gap-4 border-t border-white/10 pt-8">
+          {[
+            { value: "99.4%", label: "Attribution" },
+            { value: "120fps", label: "Tracking" },
+            { value: "13", label: "Metrics/shot" },
+          ].map((s) => (
+            <div key={s.label} className="text-center">
+              <div className="text-xl font-bold text-white tabular-nums">{s.value}</div>
+              <div className="mt-0.5 text-xs text-slate-500 uppercase tracking-wide">{s.label}</div>
+            </div>
+          ))}
         </div>
       </div>
     </section>
-  );
-}
-
-function HeroCopy({
-  onUpload,
-  secondary,
-  textOnVideo,
-}: {
-  onUpload: () => void;
-  secondary: string;
-  textOnVideo: boolean;
-}) {
-  const headingColor = textOnVideo ? "text-white" : "text-slate-900";
-  const subColor = textOnVideo ? "text-white/80" : "text-slate-600";
-  const captionColor = textOnVideo ? "text-white/55" : "text-slate-400";
-
-  return (
-    <div className="mx-auto max-w-2xl text-center">
-      <div
-        className={`hero-rise mb-4 inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-medium backdrop-blur-sm ${
-          textOnVideo
-            ? "border border-white/20 bg-white/10 text-white/80"
-            : "border border-orange-200 bg-orange-50 text-orange-600"
-        }`}
-        style={{ animationDelay: "80ms" }}
-      >
-        <span className="inline-block size-1.5 rounded-full bg-orange-400" />
-        AI-powered table tennis analysis
-      </div>
-
-      <h1
-        className={`hero-rise text-[length:var(--text-display)] leading-[1.05] font-bold tracking-tight gradient-text`}
-        style={{ animationDelay: "120ms" }}
-      >
-        PongAI
-      </h1>
-
-      <p className={`hero-rise mt-4 text-lg font-medium text-balance ${headingColor}`} style={{ animationDelay: "160ms" }}>
-        Every shot timed, attributed, classified and measured,{" "}
-        <span className="text-orange-400">from body movement alone.</span>
-      </p>
-      <p className={`hero-rise mt-2 text-sm ${captionColor}`} style={{ animationDelay: "240ms" }}>
-        No ball tracking. No sensors. Just a video of your match.
-      </p>
-
-      <div className="hero-rise mt-10 flex flex-wrap justify-center gap-4" style={{ animationDelay: "320ms" }}>
-        <Link
-          href="/analysis/game_1/"
-          className="rounded-xl gradient-brand px-6 py-3 text-sm font-semibold text-white shadow-lg hover:opacity-90 transition-opacity glow-brand"
-        >
-          Watch Demo analysis
-        </Link>
-        <button
-          type="button"
-          onClick={onUpload}
-          className={`cursor-pointer rounded-xl px-6 py-3 text-sm font-semibold transition-all ${
-            textOnVideo
-              ? "border border-white/25 bg-white/10 text-white hover:bg-white/20 backdrop-blur-sm"
-              : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 shadow-sm"
-          }`}
-        >
-          {secondary}
-        </button>
-      </div>
-
-      <div className="hero-rise mt-12 flex flex-wrap justify-center gap-8 text-center" style={{ animationDelay: "400ms" }}>
-        {[
-          { value: "99.4%", label: "Attribution accuracy" },
-          { value: "120fps", label: "Pose tracking" },
-          { value: "13", label: "Measurements per shot" },
-        ].map((stat) => (
-          <div key={stat.label}>
-            <div className={`text-xl font-bold drop-shadow ${headingColor}`}>{stat.value}</div>
-            <div className={`mt-0.5 text-xs ${captionColor}`}>{stat.label}</div>
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }
