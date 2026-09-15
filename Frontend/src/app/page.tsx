@@ -14,7 +14,7 @@ export default async function HomePage() {
       <Hero />
 
       {/* Feature cards strip */}
-      <section className="border-b border-slate-100 bg-slate-50">
+      <section className="relative z-10 border-b border-slate-100 bg-slate-50">
         <div className="mx-auto max-w-[1280px] px-4 py-16 sm:px-6">
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {[
@@ -58,7 +58,7 @@ export default async function HomePage() {
       <DashboardGlimpse stats={stats} />
 
       {/* What it measures accordion */}
-      <section className="bg-slate-50 border-t border-slate-100">
+      <section className="relative z-10 bg-slate-50 border-t border-slate-100">
         <div className="mx-auto max-w-[1280px] px-4 py-20 sm:px-6">
           <div className="max-w-3xl mx-auto">
             <div className="mb-8 text-center">
@@ -71,7 +71,7 @@ export default async function HomePage() {
       </section>
 
       {/* CTA banner */}
-      <section className="gradient-brand">
+      <section className="relative z-10 gradient-brand">
         <div className="mx-auto max-w-[1280px] px-4 py-16 sm:px-6 text-center">
           <h2 className="text-2xl font-bold text-white">Ready to analyse your match?</h2>
           <p className="mt-3 text-orange-100 text-sm max-w-md mx-auto">
