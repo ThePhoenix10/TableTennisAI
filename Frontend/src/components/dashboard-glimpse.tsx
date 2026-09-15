@@ -2,32 +2,23 @@ import Link from "next/link";
 import { formatClock } from "@/lib/analysis";
 import type { DemoStats } from "@/lib/demo-stats";
 
-/**
- * What the analysis screen actually looks like.
- *
- * A real capture of /analysis/game_1, not a mock-up. It will drift as the UI
- * changes — see public/hero/README.md for how to retake it.
- */
 export function DashboardGlimpse({ stats }: { stats: DemoStats | null }) {
   return (
-    <section
-      aria-labelledby="glimpse-heading"
-      className="mx-auto max-w-[1280px] px-4 pt-16 sm:px-6"
-    >
+    <section aria-labelledby="glimpse-heading" className="mx-auto max-w-[1280px] px-4 pt-20 sm:px-6">
       <div className="max-w-2xl">
-        <h2 id="glimpse-heading" className="text-xl font-semibold">
-          Demo Analysis
-        </h2>
-        <p className="text-ink-muted mt-2">
+        <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-medium text-orange-600">
+          <span className="inline-block size-1.5 rounded-full bg-orange-500" />
+          Live demo
+        </div>
+        <h2 id="glimpse-heading" className="text-xl font-bold text-slate-900">See it in action</h2>
+        <p className="mt-2 text-slate-500">
           Every shot on a timeline, both players tracked side by side, and the
-          measurements behind each one, with the model&rsquo;s own accuracy
-          stated next to its claims.
+          measurements behind each one, with the model&rsquo;s own accuracy stated next to its claims.
         </p>
       </div>
 
-      <div className="rounded-card border-border bg-surface relative mt-8 overflow-hidden border">
-        {/* eslint-disable-next-line @next/next/no-img-element --
-            a fixed-size screenshot; next/image would add a loader for no gain. */}
+      <div className="relative mt-8 overflow-hidden rounded-2xl border border-slate-200 shadow-xl">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/hero/dashboard.jpg"
           alt="The PongAI analysis screen: a match video with both players' skeletons tracked, player panels either side, and a timeline of every shot below."
@@ -35,25 +26,27 @@ export function DashboardGlimpse({ stats }: { stats: DemoStats | null }) {
           height={704}
           className="w-full"
         />
-        {/* Fades the cut edge rather than ending on a hard crop. */}
-        <div
-          aria-hidden
-          className="from-surface pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t to-transparent"
-        />
+        <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-slate-50 to-transparent" />
       </div>
 
-      <div className="mt-4 flex flex-wrap items-baseline justify-between gap-3">
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
         {stats && (
-          <p data-numeric className="text-ink-muted font-mono text-xs">
-            {formatClock(stats.durationS)} · {stats.shots} shots ·{" "}
-            {stats.rallies} rallies · {stats.fps}fps
-          </p>
+          <div className="flex items-center gap-4">
+            {[
+              { label: formatClock(stats.durationS), sub: "duration" },
+              { label: `${stats.shots}`, sub: "shots" },
+              { label: `${stats.rallies}`, sub: "rallies" },
+              { label: `${stats.fps}fps`, sub: "frame rate" },
+            ].map((s) => (
+              <div key={s.sub} className="flex items-baseline gap-1.5">
+                <span data-numeric className="font-mono text-sm font-semibold text-slate-800">{s.label}</span>
+                <span className="text-xs text-slate-400">{s.sub}</span>
+              </div>
+            ))}
+          </div>
         )}
-        <Link
-          href="/analysis/game_1/"
-          className="text-brand-text text-sm underline"
-        >
-          Open the full analysis →
+        <Link href="/analysis/game_1/" className="inline-flex items-center gap-1.5 text-sm font-medium text-orange-600 hover:text-orange-700 transition-colors">
+          Open the full analysis <span aria-hidden>→</span>
         </Link>
       </div>
     </section>

@@ -8,9 +8,9 @@ export function SiteFooter() {
   const uploadVideo = useUploadAction();
 
   return (
-    <footer className="border-border bg-surface mt-20 border-t">
-      <div className="mx-auto max-w-[1280px] px-4 py-10 sm:px-6">
-        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
+    <footer className="mt-24 border-t border-slate-200 bg-white">
+      <div className="mx-auto max-w-[1280px] px-4 py-14 sm:px-6">
+        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <Link href="/" className="flex items-center">
               <Image
@@ -21,28 +21,28 @@ export function SiteFooter() {
                 className="h-12 w-auto object-contain"
               />
             </Link>
-            <p className="text-ink-muted mt-3 text-sm">
+            <p className="mt-4 text-sm leading-relaxed text-slate-500">
               Table-tennis analysis from body pose alone. No ball tracking, no
               sensors. Just a video of your match.
             </p>
           </div>
 
           <nav aria-labelledby="footer-product">
-            <h2 id="footer-product" className="text-sm font-semibold">
+            <h2 id="footer-product" className="text-xs font-semibold uppercase tracking-widest text-slate-400">
               Product
             </h2>
-            <ul className="mt-3 space-y-2 text-sm">
+            <ul className="mt-4 space-y-3 text-sm">
               <li>
                 <button
                   type="button"
                   onClick={uploadVideo}
-                  className="text-ink-muted hover:text-ink cursor-pointer underline"
+                  className="text-slate-500 hover:text-slate-900 transition-colors cursor-pointer"
                 >
                   Upload a video
                 </button>
               </li>
               <li>
-                <Link href="/how-it-works/" className="text-ink-muted hover:text-ink underline">
+                <Link href="/how-it-works/" className="text-slate-500 hover:text-slate-900 transition-colors">
                   How it works
                 </Link>
               </li>
@@ -50,17 +50,17 @@ export function SiteFooter() {
           </nav>
 
           <nav aria-labelledby="footer-company">
-            <h2 id="footer-company" className="text-sm font-semibold">
+            <h2 id="footer-company" className="text-xs font-semibold uppercase tracking-widest text-slate-400">
               Company
             </h2>
-            <ul className="mt-3 space-y-2 text-sm">
+            <ul className="mt-4 space-y-3 text-sm">
               <li>
-                <Link href="/contact/" className="text-ink-muted hover:text-ink underline">
+                <Link href="/contact/" className="text-slate-500 hover:text-slate-900 transition-colors">
                   Contact us
                 </Link>
               </li>
               <li>
-                <Link href="/privacy/" className="text-ink-muted hover:text-ink underline">
+                <Link href="/privacy/" className="text-slate-500 hover:text-slate-900 transition-colors">
                   Privacy policy
                 </Link>
               </li>
@@ -68,22 +68,27 @@ export function SiteFooter() {
           </nav>
 
           <div>
-            <h2 className="text-sm font-semibold">Status</h2>
-            <p className="text-ink-muted mt-3 text-sm">
+            <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400">Status</h2>
+            <p className="mt-4 text-sm leading-relaxed text-slate-500">
               Shot detection, player attribution and stroke classification are
-              measured and published — see{" "}
-              <Link href="/how-it-works/" className="underline">
-                how it works
+              measured and published —{" "}
+              <Link href="/how-it-works/" className="text-orange-600 hover:text-orange-700 transition-colors">
+                see how it works
               </Link>
               .
             </p>
           </div>
         </div>
 
-        <p className="border-border text-ink-subtle mt-8 border-t pt-6 text-xs">
-          © {new Date().getFullYear()} PongAI. A research project, not medical
-          or professional coaching advice.
-        </p>
+        <div className="mt-12 border-t border-slate-100 pt-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <p className="text-xs text-slate-400">
+            © {new Date().getFullYear()} PongAI. A research project, not medical or professional coaching advice.
+          </p>
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block size-1.5 rounded-full bg-green-500" />
+            <span className="text-xs text-slate-400">All systems operational</span>
+          </div>
+        </div>
       </div>
     </footer>
   );
