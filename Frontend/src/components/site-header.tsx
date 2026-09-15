@@ -11,12 +11,12 @@ export function SiteHeader() {
   const uploadVideo = useUploadAction();
 
   return (
-    <header className="sticky top-0 z-50 glass border-b border-black/5 shadow-sm">
+    <header className="sticky top-0 z-50 border-b border-slate-200 bg-white shadow-sm">
       <a href="#main" className="focus:bg-brand focus:text-on-brand sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:rounded focus:px-3 focus:py-2 focus:text-sm">
         Skip to content
       </a>
       <div className="flex h-16 w-full items-center gap-4 pr-6">
-        <Link href="/" className="flex items-center">
+        <Link href="/" className="flex items-center bg-white">
           <Image
             src="/PongAILogo.jpeg"
             alt="PongAI"
